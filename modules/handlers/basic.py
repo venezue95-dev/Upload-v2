@@ -73,11 +73,7 @@ def register(app: Client) -> None:
         elapsed = int((time.perf_counter() - start) * 1000)
         counts = QUEUE.counts()
         await sent.edit_text(
-            f"🏓 <b>Pong!</b>\n"
-            f"⚡️ Latencia: {T.code(str(elapsed) + ' ms')}\n"
-            f"🧮 Cola: {T.code(str(counts['active']) + ' activas')} · "
-            f"{T.code(str(counts['waiting']) + ' en espera')}\n"
-            f"⏳ Encendido: {T.code(T._uptime(counts['uptime']))}",
+            T.ping_text(elapsed, counts),
             parse_mode=ParseMode.HTML,
         )
 

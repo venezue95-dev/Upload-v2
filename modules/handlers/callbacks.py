@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from types import SimpleNamespace
 from pyrogram import Client
 from pyrogram.enums import ParseMode
@@ -152,6 +153,17 @@ async def _menu(client: Client, cq: CallbackQuery, data: str, user_id: int) -> N
         )
         keyboard = T.admin_keyboard(QUEUE.paused) if can_manage(user_id) else None
         await _edit(cq, text, keyboard)
+        return
+
+    if action == "ping":
+        started = time.perf_counter()
+        await cq.answer("🏓 Midiendo…")
+        elapsed = int((time.perf_counter() - started) * 1000)
+        await _edit(
+            cq,
+            T.ping_text(elapsed, QUEUE.counts()),
+            T.main_menu_keyboard(is_owner_user=is_owner(user_id)),
+        )
         return
 
     if action in ("stats", "sys") and not can_manage(user_id):

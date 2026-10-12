@@ -524,6 +524,16 @@ def status_text(*, bot_line: str, storage_line: str, settings, counts: dict,
     )
 
 
+def ping_text(elapsed_ms: int, counts: dict) -> str:
+    return cut(
+        f"<b>🏓 Ping</b>\n\n"
+        f"⚡️ Latencia: {code(str(elapsed_ms) + ' ms')}\n"
+        f"🧮 Cola: {code(str(counts['active']) + ' activas')} · "
+        f"{code(str(counts['waiting']) + ' en espera')}\n"
+        f"⏳ Encendido: {code(_uptime(counts['uptime']))}"
+    )
+
+
 def stats_text(global_stats: dict, top: Sequence[dict], counts: dict) -> str:
     lines = [
         "<b>📈 Estadísticas globales</b>",
@@ -621,6 +631,7 @@ def main_menu_keyboard(*, is_owner_user: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton("📊 Estado", callback_data="menu:status"),
             InlineKeyboardButton("📖 Ayuda", callback_data="menu:help:1"),
         ],
+        [InlineKeyboardButton("🏓 Ping", callback_data="menu:ping")],
     ]
     if is_owner_user:
         rows.append([
