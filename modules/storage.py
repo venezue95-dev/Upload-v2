@@ -195,6 +195,17 @@ def user_recent(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
     return [_row(r) for r in rows]
 
 
+def get_task(task_id: str, user_id: int) -> Optional[Dict[str, Any]]:
+    """Obtiene una tarea histórica únicamente si pertenece al usuario."""
+    conn = _conn()
+    with _LOCK:
+        row = conn.execute(
+            "SELECT * FROM tasks WHERE task_id=? AND user_id=?",
+            (task_id, user_id),
+        ).fetchone()
+    return _row(row) if row else None
+
+
 def global_stats() -> Dict[str, Any]:
     conn = _conn()
     with _LOCK:

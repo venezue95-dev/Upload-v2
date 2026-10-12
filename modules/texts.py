@@ -722,14 +722,33 @@ def delete_confirm_keyboard(task_id: str) -> InlineKeyboardMarkup:
     ]])
 
 
-def history_keyboard(page: int, pages: int) -> InlineKeyboardMarkup:
+def history_delete_confirm_keyboard(task_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Sí, borrar", callback_data=f"hist:delete:yes:{task_id}"),
+        InlineKeyboardButton("↩️ No", callback_data="menu:hist"),
+    ]])
+
+
+def history_keyboard(page: int, pages: int, rows: Sequence[dict] = ()) -> InlineKeyboardMarkup:
+    buttons = []
+    chunk = rows[(page - 1) * 5 : page * 5]
+    for row in chunk:
+        if row.get("urls"):
+            buttons.append([
+                InlineKeyboardButton("🔗 Enlaces", callback_data=f"hist:links:{row['task_id']}"),
+                InlineKeyboardButton("🗑 Borrar", callback_data=f"hist:delete:{row['task_id']}"),
+            ])
+        else:
+            buttons.append([InlineKeyboardButton("✅ Ya eliminado", callback_data="noop")])
     nav = []
     if page > 1:
         nav.append(InlineKeyboardButton("⬅️", callback_data=f"hist:page:{page-1}"))
     nav.append(InlineKeyboardButton(f"{page}/{pages}", callback_data="noop"))
     if page < pages:
         nav.append(InlineKeyboardButton("➡️", callback_data=f"hist:page:{page+1}"))
-    return InlineKeyboardMarkup([nav, [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")]])
+    buttons.append(nav)
+    buttons.append([InlineKeyboardButton("🏠 Menú", callback_data="menu:home")])
+    return InlineKeyboardMarkup(buttons)
 
 
 def settings_keyboard(keys: Sequence[str], values: dict, labels: dict, units: dict,

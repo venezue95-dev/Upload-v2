@@ -51,7 +51,7 @@ def build_history_view(user_id: int, page: int) -> Tuple[str, object]:
     pages = max(1, (len(rows) + HIST_PER_PAGE - 1) // HIST_PER_PAGE)
     page = max(1, min(page, pages))
     text = T.history_text(rows, page, HIST_PER_PAGE)
-    keyboard = T.history_keyboard(page, pages)
+    keyboard = T.history_keyboard(page, pages, rows)
     return text, keyboard
 
 

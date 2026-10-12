@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from types import SimpleNamespace
 from pyrogram import Client
 from pyrogram.enums import ParseMode
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -71,6 +72,10 @@ async def _dispatch(client: Client, cq: CallbackQuery, data: str, user_id: int) 
         return
 
     if data.startswith("hist:"):
+        parts = data.split(":")
+        if len(parts) >= 3 and parts[1] in ("links", "delete"):
+            await _history_action(client, cq, parts, user_id)
+            return
         page = _int(data.rsplit(":", 1)[-1], 1)
         text, keyboard = build_history_view(user_id, page)
         await cq.answer()
@@ -176,6 +181,45 @@ async def _menu(client: Client, cq: CallbackQuery, data: str, user_id: int) -> N
         return
 
     await cq.answer()
+
+
+# ----------------------------------------------------------------------
+# Acciones persistentes del historial.
+# ----------------------------------------------------------------------
+async def _history_action(client: Client, cq: CallbackQuery, parts: list, user_id: int) -> None:
+    """Acciones sobre una subida guardada, incluso después de reiniciar."""
+    action = parts[1]
+    confirmed = len(parts) >= 4 and parts[2] == "yes"
+    task_id = parts[3] if confirmed else parts[2]
+    row = storage.get_task(task_id, user_id)
+    if not row:
+        await cq.answer("⌛️ Ese archivo ya no está en el historial.", show_alert=True)
+        return
+    if action == "links":
+        if not row.get("urls"):
+            await cq.answer("ℹ️ Los enlaces ya fueron eliminados.", show_alert=True)
+            return
+        await cq.answer("📄 Enviando enlaces…")
+        historical_task = SimpleNamespace(**row)
+        historical_task.parts_total = row.get("parts", 0)
+        await send_links_txt(client, cq.message.chat.id, historical_task)
+        return
+    if not row.get("urls") or not row.get("keys"):
+        await cq.answer("ℹ️ Este archivo ya fue eliminado.", show_alert=True)
+        return
+    if not confirmed:
+        await cq.answer()
+        await _edit(
+            cq,
+            f"<b>🗑 ¿Borrar este archivo de toDus?</b>\n\n"
+            f"📄 {T.code(T.shorten(row['filename'], 44))}\n"
+            + T.i("Los enlaces dejarán de funcionar."),
+            T.history_delete_confirm_keyboard(task_id),
+        )
+        return
+    historical_task = SimpleNamespace(**row)
+    historical_task.deleted_from_s3 = False
+    await _delete_from_s3(cq, historical_task)
 
 
 # ----------------------------------------------------------------------
