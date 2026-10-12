@@ -147,7 +147,11 @@ class UploadTask:
         self._inflight: Dict[int, float] = {}  # parte -> t0 (monotonic)
         self._lock = threading.Lock()
         self._meter = SpeedMeter()
+        self._download_meter = SpeedMeter()
+        self._upload_meter = SpeedMeter()
         self.speed = 0.0
+        self.download_speed = 0.0
+        self.upload_speed = 0.0
         self._mono_start = time.monotonic()
 
         # Cola
@@ -239,6 +243,9 @@ class UploadTask:
         self.started_at = time.time()
         self._mono_start = time.monotonic()
         self._meter.reset()
+        self._download_meter.reset()
+        self._upload_meter.reset()
+        self.speed = self.download_speed = self.upload_speed = 0.0
 
     def mark_finished(self, status: TaskStatus, error: Optional[str] = None) -> None:
         self.status = status
@@ -251,11 +258,13 @@ class UploadTask:
     # Métricas.
     # ------------------------------------------------------------------
     def sample_speed(self) -> float:
-        """Llama el notificador cada pocos segundos: actualiza la velocidad."""
+        """Actualiza velocidades independientes de descarga y subida."""
         mono = time.monotonic()
         if self.status.is_final:
             return self.speed
-        self.speed = self._meter.update(self.bytes_transferred, mono)
+        self.download_speed = self._download_meter.update(self.bytes_fetched, mono)
+        self.upload_speed = self._upload_meter.update(self.bytes_transferred, mono)
+        self.speed = self.upload_speed if self.bytes_transferred else self.download_speed
         return self.speed
 
     def _inflight_credit(self) -> float:
@@ -288,9 +297,13 @@ class UploadTask:
 
     def eta_seconds(self) -> Optional[float]:
         total = self.file_size or 0
-        if total <= 0 or self.speed <= 0:
+        if total <= 0:
             return None
-        return max(0.0, (total - self.processed_bytes()) / self.speed)
+        if self.bytes_transferred < total and self.upload_speed > 0:
+            return max(0.0, (total - self.bytes_transferred) / self.upload_speed)
+        if self.bytes_fetched < total and self.download_speed > 0:
+            return max(0.0, (total - self.bytes_fetched) / self.download_speed)
+        return None
 
     def duration(self) -> float:
         start = self.started_at or self.created_at

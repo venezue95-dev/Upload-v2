@@ -131,7 +131,7 @@ def task_line(task: "UploadTask", index: Optional[int] = None) -> str:
 # Bienvenida / ayuda.
 # ----------------------------------------------------------------------
 def welcome_text(user_id: int, *, public: bool, is_owner: bool, cfg,
-                 settings) -> str:
+                 settings, admin_name: str = "") -> str:
     modo = "🌍 público" if public else "🔒 privado"
     rol = "👑 owner" if is_owner else "👤 usuario"
     return cut(
@@ -139,7 +139,8 @@ def welcome_text(user_id: int, *, public: bool, is_owner: bool, cfg,
         f"<i>Convierte cualquier archivo o enlace en un enlace de descarga directa.</i>\n\n"
         f"<b>👤 Tu cuenta</b>\n"
         f"• ID: {code(user_id)}\n"
-        f"• Rol: {esc(rol)} · Modo: {esc(modo)}\n\n"
+        f"• Rol: {esc(rol)} · Modo: {esc(modo)}\n"
+        f"• 👑 Administrador: {b(admin_name or str(cfg.owner_id or 'no configurado'))}\n\n"
         f"<b>🚀 Cómo usarlo</b>\n"
         f"1️⃣ Reenvía (o envía) un <b>documento / vídeo / audio</b>.\n"
         f"2️⃣ O pega uno o varios <b>enlaces http(s)</b> directos.\n"
@@ -225,11 +226,15 @@ def progress_text(task: "UploadTask") -> str:
     eta = task.eta_seconds()
 
     header = f"<b>{esc(task.phase or 'Procesando')}</b>\n<b>{esc(shorten(task.filename, 48))}</b>"
+    download_pct = (100.0 * task.bytes_fetched / total) if total else 0.0
+    upload_pct = (100.0 * task.processed_bytes() / total) if total else 0.0
     lines = [
         header,
-        f"<b>{P.bar(pct)} {P.percent_str(pct)}</b>",
-        f"<b>📦 {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)}</b>",
-        f"<b>⚡️ {P.human_speed(speed)}   ⏳ {P.human_time_clock(eta)}</b>",
+        f"<b>⬆️ {P.bar(upload_pct)} {P.percent_str(upload_pct)}</b>",
+        f"<b>📤 Subido: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {P.human_speed(task.upload_speed)}</b>",
+        f"<b>⬇️ {P.bar(download_pct)} {P.percent_str(download_pct)}</b>",
+        f"<b>📥 Descargado: {P.human_size_compact(task.bytes_fetched)} / {P.human_size_compact(total)} · {P.human_speed(task.download_speed)}</b>",
+        f"<b>⏳ ETA: {P.human_time_clock(eta)}</b>",
     ]
 
     detail: List[str] = []

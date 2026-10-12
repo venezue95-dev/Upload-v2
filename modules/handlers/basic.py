@@ -30,6 +30,16 @@ def register(app: Client) -> None:
     async def _start(client: Client, message: Message):
         user = message.from_user
         is_own = is_owner(user.id)
+        admin_name = str(CONFIG.owner_id or "no configurado")
+        if CONFIG.owner_id:
+            try:
+                owner = await client.get_users(CONFIG.owner_id)
+                admin_name = (
+                    f"@{owner.username}" if owner.username
+                    else (owner.first_name or admin_name)
+                )
+            except Exception:
+                pass
         await reply(
             message,
             T.welcome_text(
@@ -38,6 +48,7 @@ def register(app: Client) -> None:
                 is_owner=is_own,
                 cfg=CONFIG,
                 settings=RUNTIME_SETTINGS,
+                admin_name=admin_name,
             ),
             keyboard=T.main_menu_keyboard(is_owner_user=is_own),
         )

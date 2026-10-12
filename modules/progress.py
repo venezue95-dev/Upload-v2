@@ -26,9 +26,9 @@ def human_size(num: float) -> str:
         if num < 1024.0:
             if unit == "B":
                 return f"{int(num)} B"
-            return f"{num:.2f} {unit}"
+            return f"{num:.2f}".rstrip("0").rstrip(".") + f" {unit}"
         num /= 1024.0
-    return f"{num:.2f} PB"
+    return f"{num:.2f}".rstrip("0").rstrip(".") + " PB"
 
 
 def human_size_compact(num: float) -> str:
@@ -40,9 +40,9 @@ def human_size_compact(num: float) -> str:
         if num < 1024.0:
             if unit == "B":
                 return f"{int(num)} B"
-            return f"{num:.1f} {unit}"
+            return f"{num:.1f}".rstrip("0").rstrip(".") + f" {unit}"
         num /= 1024.0
-    return f"{num:.1f} PB"
+    return f"{num:.1f}".rstrip("0").rstrip(".") + " PB"
 
 
 def human_speed(bps: float) -> str:
@@ -79,8 +79,8 @@ def human_time_clock(seconds: Optional[float]) -> str:
 
 
 def bar(percent: float, width: int = BAR_WIDTH,
-        filled: str = "█", empty: str = "░") -> str:
-    """Barra de progreso compacta: '████████░░░░░░░░░░'."""
+        filled: str = "⬢", empty: str = "⬡") -> str:
+    """Barra visual: '⬢⬢⬢⬢⬡⬡⬡⬡' con porcentaje acotado a 0–100."""
     percent = max(0.0, min(100.0, percent or 0.0))
     done = int(round(width * percent / 100.0))
     return filled * done + empty * (width - done)

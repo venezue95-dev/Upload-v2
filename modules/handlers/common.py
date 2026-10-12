@@ -37,8 +37,8 @@ def is_owner(user_id: int) -> bool:
 
 
 def can_manage(user_id: int) -> bool:
-    """Puede gestionar la cola global (owner o sin owner configurado)."""
-    return is_owner(user_id) or CONFIG.owner_id is None
+    """Puede gestionar la cola global: únicamente el owner configurado."""
+    return is_owner(user_id)
 
 
 def _authorized_filter():
