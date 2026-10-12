@@ -59,6 +59,11 @@ def display_number(value) -> str:
     return str(value)
 
 
+def metric_speed(value: float) -> str:
+    """Evita mostrar 0 B/s antes de tener una muestra real de velocidad."""
+    return P.human_speed(value) if value and value > 0 else "calculando…"
+
+
 def _bold_non_link_text(text: str) -> str:
     """Pone en negrita el texto visible, dejando intactos los enlaces en <pre>."""
     parts = re.split(r"(<[^>]+>)", text)
@@ -130,8 +135,8 @@ def task_line(task: "UploadTask", index: Optional[int] = None) -> str:
             if task.status == TaskStatus.DOWNLOADING
             else task.upload_speed
         )
-        extra.append(P.human_speed(current_speed))
-        extra.append(f"ETA {P.human_time(task.eta_seconds())}")
+        extra.append(metric_speed(current_speed))
+        extra.append(f"ETA {P.human_time(task.eta_seconds()) if task.eta_seconds() is not None else 'calculando…'}")
     if task.status == TaskStatus.QUEUED and task.queue_position:
         extra.append(f"#{task.queue_position} en cola")
     if extra:
@@ -246,21 +251,24 @@ def progress_text(task: "UploadTask") -> str:
     if task.mode == "stream":
         lines += [
             f"<b>⬆️ {P.bar(upload_pct)} {P.percent_str(upload_pct)}</b>",
-            f"<b>📤 Subido: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {P.human_speed(task.upload_speed)}</b>",
+            f"<b>📤 Subido: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {metric_speed(task.upload_speed)}</b>",
             f"<b>⬇️ {P.bar(download_pct)} {P.percent_str(download_pct)}</b>",
-            f"<b>📥 Descargado: {P.human_size_compact(task.bytes_fetched)} / {P.human_size_compact(total)} · {P.human_speed(task.download_speed)}</b>",
+            f"<b>📥 Descargado: {P.human_size_compact(task.bytes_fetched)} / {P.human_size_compact(total)} · {metric_speed(task.download_speed)}</b>",
         ]
     elif task.status == TaskStatus.DOWNLOADING:
         lines += [
             f"<b>⬇️ {P.bar(download_pct)} {P.percent_str(download_pct)}</b>",
-            f"<b>📥 Descargando: {P.human_size_compact(task.bytes_fetched)} / {P.human_size_compact(total)} · {P.human_speed(task.download_speed)}</b>",
+            f"<b>📥 Descargando: {P.human_size_compact(task.bytes_fetched)} / {P.human_size_compact(total)} · {metric_speed(task.download_speed)}</b>",
         ]
     else:
         lines += [
             f"<b>⬆️ {P.bar(upload_pct)} {P.percent_str(upload_pct)}</b>",
-            f"<b>📤 Subiendo: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {P.human_speed(task.upload_speed)}</b>",
+            f"<b>📤 Subiendo: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {metric_speed(task.upload_speed)}</b>",
         ]
-    lines.append(f"<b>⏳ ETA: {P.human_time_clock(eta)}</b>")
+    eta_label = P.human_time_clock(eta) if eta is not None else "calculando…"
+    lines.append(f"<b>⏳ ETA: {eta_label}</b>")
+    if task.status == TaskStatus.UPLOADING and task.parts_total and task.parts_done < task.parts_total:
+        lines.append(f"<b>🧩 Parte {min(task.parts_done + 1, task.parts_total)}/{task.parts_total} en subida</b>")
 
     detail: List[str] = []
     if task.parts_total > 1:

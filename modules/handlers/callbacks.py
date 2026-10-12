@@ -322,7 +322,10 @@ async def _delete_from_s3(cq: CallbackQuery, task) -> None:
         f"📄 {T.code(T.shorten(task.filename, 44))}\n"
         f"✅ Eliminados: {T.code(ok)} · ❌ Fallidos: {T.code(failed)}\n\n"
         + T.i("Los enlaces ya no están disponibles."),
-        InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Mi cola", callback_data="cola:refresh")]]),
+        InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗂 Mi historial", callback_data="menu:hist")],
+            [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
+        ]),
     )
 
 
