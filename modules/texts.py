@@ -534,6 +534,26 @@ def ping_text(elapsed_ms: int, counts: dict) -> str:
     )
 
 
+def top_users_text(rows: Sequence[dict], *, is_owner_user: bool, owner_id: int = 0) -> str:
+    lines = [
+        "<b>🏆 Top usuarios</b>",
+        "<i>Ranking por espacio total subido</i>",
+        "",
+    ]
+    if not rows:
+        lines.append("Todavía no hay datos suficientes.")
+    else:
+        for idx, row in enumerate(rows, start=1):
+            marker = " 👑" if is_owner_user and int(row.get("user_id", 0)) == owner_id else ""
+            lines.append(
+                f"{idx}. {code(str(row.get('user_id', '—')))}{marker} · "
+                f"{P.human_size(int(row.get('bytes', 0) or 0))} · "
+                f"{int(row.get('uploads', 0) or 0)} subida(s)"
+            )
+    lines += ["", i("Solo se muestran IDs; no se publican nombres de usuario.")]
+    return cut("\n".join(lines))
+
+
 def stats_text(global_stats: dict, top: Sequence[dict], counts: dict) -> str:
     lines = [
         "<b>📈 Estadísticas globales</b>",
@@ -632,6 +652,10 @@ def main_menu_keyboard(*, is_owner_user: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton("📖 Ayuda", callback_data="menu:help:1"),
         ],
         [InlineKeyboardButton("🏓 Ping", callback_data="menu:ping")],
+        [InlineKeyboardButton(
+            "👑 Top usuarios" if is_owner_user else "🏆 Top usuarios",
+            callback_data="menu:top",
+        )],
     ]
     if is_owner_user:
         rows.append([
@@ -648,6 +672,12 @@ def ping_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📋 Mi cola", callback_data="menu:cola"),
             InlineKeyboardButton("📊 Estado", callback_data="menu:status"),
         ],
+        [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
+    ])
+
+
+def top_users_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
         [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
     ])
 

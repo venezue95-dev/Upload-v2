@@ -166,6 +166,19 @@ async def _menu(client: Client, cq: CallbackQuery, data: str, user_id: int) -> N
         )
         return
 
+    if action == "top":
+        await cq.answer("🏆 Cargando ranking…")
+        await _edit(
+            cq,
+            T.top_users_text(
+                storage.top_users(10),
+                is_owner_user=is_own,
+                owner_id=int(CONFIG.owner_id or 0),
+            ),
+            T.top_users_keyboard(),
+        )
+        return
+
     if action in ("stats", "sys") and not can_manage(user_id):
         await cq.answer("⛔️ Solo el owner.", show_alert=True)
         return
