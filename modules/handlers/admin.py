@@ -33,29 +33,13 @@ from config import CONFIG
 from .. import storage, texts as T
 from ..queue import QUEUE
 from ..runtime_settings import RUNTIME_SETTINGS
-from .common import AUTHORIZED, NOT_OWNER, OWNER, reply
+from .common import OWNER, reply
 
 log = logging.getLogger("s3_bot.admin")
 _boot_ts = time.time()
 
 
 def register(app: Client) -> None:
-    @app.on_message(
-        filters.command([
-            "stats", "estadisticas", "usuarios", "users", "anuncio",
-            "pausar", "reanudar", "sistema", "sys", "ban", "bloquear",
-            "unban", "desbloquear", "baneados", "bans", "mantenimiento",
-            "limpiar", "settings",
-        ]) & AUTHORIZED & NOT_OWNER
-    )
-    async def _admin_only_notice(client: Client, message: Message):
-        await reply(
-            message,
-            "🔐 <b>Comando restringido</b>\n\n"
-            "Este comando está disponible únicamente para el administrador del bot.\n"
-            "Puedes usar las opciones disponibles en el menú principal.",
-        )
-
     @app.on_message(filters.command(["stats", "estadisticas"]) & OWNER)
     async def _stats(client: Client, message: Message):
         data = storage.global_stats()

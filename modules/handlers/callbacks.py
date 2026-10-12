@@ -32,10 +32,9 @@ from ..queue import QUEUE
 from ..runtime_settings import RUNTIME_SETTINGS
 from ..s3_client import S3Client
 from .admin import _system_info
-from .basic import _ping_storage, owner_display_name
+from .basic import _ping_storage
 from .cola import build_history_view, build_queue_view, retry_task
-from .common import can_manage, display_name_of, is_owner
-from .files import build_files_view, deletion_scope, parse_positions, rows_for, selected_rows
+from .common import can_manage, is_owner
 from .settings import build_settings_view
 
 log = logging.getLogger("s3_bot.callbacks")
@@ -83,10 +82,6 @@ async def _dispatch(client: Client, cq: CallbackQuery, data: str, user_id: int) 
         await _edit(cq, text, keyboard)
         return
 
-    if data.startswith("files:"):
-        await _files(client, cq, data, user_id)
-        return
-
     # ---------------------------------------------------------- tareas
     if data.startswith("t:"):
         await _task_action(client, cq, data, user_id)
@@ -113,13 +108,11 @@ async def _menu(client: Client, cq: CallbackQuery, data: str, user_id: int) -> N
     is_own = is_owner(user_id)
 
     if action == "home":
-        admin_name = await owner_display_name(client)
         await cq.answer()
         await _edit(
             cq,
             T.welcome_text(user_id, public=not CONFIG.allowed_users, is_owner=is_own,
-                           cfg=CONFIG, settings=RUNTIME_SETTINGS,
-                           admin_name=admin_name, user_name=display_name_of(cq.from_user)),
+                           cfg=CONFIG, settings=RUNTIME_SETTINGS),
             T.main_menu_keyboard(is_owner_user=is_own),
         )
         return
@@ -138,12 +131,6 @@ async def _menu(client: Client, cq: CallbackQuery, data: str, user_id: int) -> N
 
     if action == "hist":
         text, keyboard = build_history_view(user_id, 1)
-        await cq.answer()
-        await _edit(cq, text, keyboard)
-        return
-
-    if action == "files":
-        text, keyboard = build_files_view(user_id, 1)
         await cq.answer()
         await _edit(cq, text, keyboard)
         return
@@ -174,7 +161,7 @@ async def _menu(client: Client, cq: CallbackQuery, data: str, user_id: int) -> N
         await cq.answer("📊 Consultando cuota…")
         await _edit(
             cq,
-            T.quota_text(used=storage.bytes_today(user_id), limit=limit, is_owner_user=is_own),
+            T.quota_text(used=storage.bytes_today(user_id), limit=limit),
             T.quota_keyboard(),
         )
         return
@@ -219,95 +206,6 @@ async def _menu(client: Client, cq: CallbackQuery, data: str, user_id: int) -> N
         return
 
     await cq.answer()
-
-
-# ----------------------------------------------------------------------
-# Archivos subidos: vista global/propia y borrado masivo.
-# ----------------------------------------------------------------------
-async def _files(client: Client, cq: CallbackQuery, data: str, user_id: int) -> None:
-    parts = data.split(":")
-    action = parts[1] if len(parts) > 1 else "page"
-    owner = is_owner(user_id)
-    rows = rows_for(user_id)
-
-    if action == "page":
-        page = _int(parts[2] if len(parts) > 2 else "1", 1)
-        text, keyboard = build_files_view(user_id, page)
-        await cq.answer()
-        await _edit(cq, text, keyboard)
-        return
-
-    if action == "help":
-        await cq.answer(
-            "Usa /eliminar 1,3 para borrar posiciones concretas.",
-            show_alert=True,
-        )
-        return
-
-    if action == "links" and len(parts) >= 3:
-        row = storage.get_task(parts[2], user_id)
-        if owner:
-            row = next((item for item in rows if item.get("task_id") == parts[2]), None)
-        if not row or not row.get("urls"):
-            await cq.answer("ℹ️ Ese archivo ya no está disponible.", show_alert=True)
-            return
-        await cq.answer("📄 Enviando enlaces…")
-        historical_task = SimpleNamespace(**row)
-        historical_task.parts_total = row.get("parts", 0)
-        await send_links_txt(client, cq.message.chat.id, historical_task)
-        return
-
-    if action == "all":
-        targets = deletion_scope(rows, user_id, all_files=True)
-        if not targets:
-            await cq.answer("✅ No hay archivos que se puedan eliminar.", show_alert=True)
-            return
-        await cq.answer()
-        await _edit(
-            cq,
-            "<b>🧹 ¿Confirmas la eliminación total?</b>\n\n"
-            + T.i("Se eliminarán todos los archivos permitidos. Los archivos del administrador están protegidos." if owner else
-                  "Se eliminarán todos tus archivos. Los enlaces dejarán de funcionar."),
-            T.files_delete_all_confirm_keyboard(is_owner_user=owner),
-        )
-        return
-
-    if action == "confirmall":
-        targets = deletion_scope(rows_for(user_id), user_id, all_files=True)
-        await _delete_file_rows(cq, targets, owner, all_mode=True)
-        return
-
-    if action == "confirmpos" and len(parts) >= 3:
-        positions = parse_positions(parts[2], len(rows))
-        targets = selected_rows(rows, positions)
-        await _delete_file_rows(cq, targets, owner, all_mode=False)
-        return
-
-    await cq.answer()
-
-
-async def _delete_file_rows(cq: CallbackQuery, rows: list, owner: bool, *, all_mode: bool) -> None:
-    if not rows:
-        await cq.answer("ℹ️ No hay archivos seleccionados.", show_alert=True)
-        return
-    if all_mode and owner:
-        rows = [row for row in rows if int(row.get("user_id", 0)) != int(CONFIG.owner_id or 0)]
-    await cq.answer("🗑 Eliminando archivos…")
-    client_s3 = S3Client(CONFIG.s3)
-    removed = failed = 0
-    for row in rows:
-        keys = list(row.get("keys") or [])
-        ok, bad = await asyncio.to_thread(client_s3.delete_keys, keys)
-        if bad == 0:
-            storage.mark_deleted(row["task_id"])
-            removed += 1
-        else:
-            failed += 1
-    text, keyboard = build_files_view(cq.from_user.id, 1)
-    summary = f"<b>🧹 Eliminación finalizada</b>\n\n✅ Archivos eliminados: <b>{removed}</b>"
-    if failed:
-        summary += f"\n⚠️ Con errores: <b>{failed}</b>"
-    await _edit(cq, summary + "\n\n" + T.i("Puedes volver a consultar la lista cuando quieras."), keyboard)
 
 
 # ----------------------------------------------------------------------

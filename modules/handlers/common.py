@@ -67,17 +67,8 @@ def _owner_filter():
     return filters.create(_flt, "OwnerFilter")
 
 
-def _not_owner_filter():
-    async def _flt(_, __, message: Message) -> bool:
-        user = getattr(message, "from_user", None)
-        return bool(user and not can_manage(user.id))
-
-    return filters.create(_flt, "NotOwnerFilter")
-
-
 AUTHORIZED = _authorized_filter()
 OWNER = _owner_filter()
-NOT_OWNER = _not_owner_filter()
 BANNED = _banned_filter()
 
 
@@ -85,15 +76,6 @@ def username_of(user) -> str:
     if user is None:
         return ""
     return user.username or user.first_name or str(user.id)
-
-
-def display_name_of(user) -> str:
-    """Nombre apto para la interfaz: prioriza @username y nunca el ID."""
-    if user is None:
-        return "Usuario"
-    if user.username:
-        return f"@{user.username}"
-    return user.first_name or "Usuario"
 
 
 # ----------------------------------------------------------------------

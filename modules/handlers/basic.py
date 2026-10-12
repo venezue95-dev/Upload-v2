@@ -18,21 +18,11 @@ from config import CONFIG
 from .. import texts as T
 from ..queue import QUEUE
 from ..runtime_settings import RUNTIME_SETTINGS
-from .common import AUTHORIZED, BANNED, display_name_of, is_owner, reply
+from .common import AUTHORIZED, BANNED, is_owner, reply
 
 log = logging.getLogger("s3_bot.basic")
 
 _start_ts = time.time()
-
-
-async def owner_display_name(client: Client) -> str:
-    if not CONFIG.owner_id:
-        return "Administrador"
-    try:
-        owner = await client.get_users(CONFIG.owner_id)
-        return display_name_of(owner)
-    except Exception:  # noqa: BLE001
-        return "Administrador"
 
 
 def register(app: Client) -> None:
@@ -40,7 +30,16 @@ def register(app: Client) -> None:
     async def _start(client: Client, message: Message):
         user = message.from_user
         is_own = is_owner(user.id)
-        admin_name = await owner_display_name(client)
+        admin_name = str(CONFIG.owner_id or "no configurado")
+        if CONFIG.owner_id:
+            try:
+                owner = await client.get_users(CONFIG.owner_id)
+                admin_name = (
+                    f"@{owner.username}" if owner.username
+                    else (owner.first_name or admin_name)
+                )
+            except Exception:
+                pass
         await reply(
             message,
             T.welcome_text(
@@ -50,7 +49,6 @@ def register(app: Client) -> None:
                 cfg=CONFIG,
                 settings=RUNTIME_SETTINGS,
                 admin_name=admin_name,
-                user_name=display_name_of(user),
             ),
             keyboard=T.main_menu_keyboard(is_owner_user=is_own),
         )

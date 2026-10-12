@@ -34,7 +34,7 @@ from pyrogram.enums import ParseMode
 
 from config import CONFIG
 from modules import notifier, storage
-from modules.handlers import admin, basic, callbacks, cola, files, settings, upload, url
+from modules.handlers import admin, basic, callbacks, cola, settings, upload, url
 from modules import texts as T
 from modules.pipeline import cleanup_downloads_root, run_task
 from modules.queue import QUEUE
@@ -72,7 +72,6 @@ def register_handlers(app: Client) -> None:
     admin.register(app)
     cola.register(app)
     settings.register(app)
-    files.register(app)
     upload.register(app)
     url.register(app)
     callbacks.register(app)
