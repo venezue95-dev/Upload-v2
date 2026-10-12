@@ -52,6 +52,13 @@ def pre(value) -> str:
     return f"<pre>{esc(value)}</pre>"
 
 
+def display_number(value) -> str:
+    """Muestra 2.0 como 2, conservando decimales significativos."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
 def _bold_non_link_text(text: str) -> str:
     """Pone en negrita el texto visible, dejando intactos los enlaces en <pre>."""
     parts = re.split(r"(<[^>]+>)", text)
@@ -118,6 +125,13 @@ def task_line(task: "UploadTask", index: Optional[int] = None) -> str:
         extra.append(f"🧩 {task.parts_done}/{task.parts_total}")
     if task.status in (TaskStatus.DOWNLOADING, TaskStatus.UPLOADING):
         extra.append(P.percent_str(task.progress_percent()))
+        current_speed = (
+            task.download_speed
+            if task.status == TaskStatus.DOWNLOADING
+            else task.upload_speed
+        )
+        extra.append(P.human_speed(current_speed))
+        extra.append(f"ETA {P.human_time(task.eta_seconds())}")
     if task.status == TaskStatus.QUEUED and task.queue_position:
         extra.append(f"#{task.queue_position} en cola")
     if extra:
@@ -135,7 +149,7 @@ def welcome_text(user_id: int, *, public: bool, is_owner: bool, cfg,
     modo = "🌍 público" if public else "🔒 privado"
     rol = "👑 owner" if is_owner else "👤 usuario"
     return cut(
-        f"<b>☁️ toDus S3 Uploader</b>\n"
+        f"<b>☁️ toDus Upload</b>\n"
         f"<i>Convierte cualquier archivo o enlace en un enlace de descarga directa.</i>\n\n"
         f"<b>👤 Tu cuenta</b>\n"
         f"• ID: {code(user_id)}\n"
@@ -228,14 +242,25 @@ def progress_text(task: "UploadTask") -> str:
     header = f"<b>{esc(task.phase or 'Procesando')}</b>\n<b>{esc(shorten(task.filename, 48))}</b>"
     download_pct = (100.0 * task.bytes_fetched / total) if total else 0.0
     upload_pct = (100.0 * task.processed_bytes() / total) if total else 0.0
-    lines = [
-        header,
-        f"<b>⬆️ {P.bar(upload_pct)} {P.percent_str(upload_pct)}</b>",
-        f"<b>📤 Subido: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {P.human_speed(task.upload_speed)}</b>",
-        f"<b>⬇️ {P.bar(download_pct)} {P.percent_str(download_pct)}</b>",
-        f"<b>📥 Descargado: {P.human_size_compact(task.bytes_fetched)} / {P.human_size_compact(total)} · {P.human_speed(task.download_speed)}</b>",
-        f"<b>⏳ ETA: {P.human_time_clock(eta)}</b>",
-    ]
+    lines = [header]
+    if task.mode == "stream":
+        lines += [
+            f"<b>⬆️ {P.bar(upload_pct)} {P.percent_str(upload_pct)}</b>",
+            f"<b>📤 Subido: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {P.human_speed(task.upload_speed)}</b>",
+            f"<b>⬇️ {P.bar(download_pct)} {P.percent_str(download_pct)}</b>",
+            f"<b>📥 Descargado: {P.human_size_compact(task.bytes_fetched)} / {P.human_size_compact(total)} · {P.human_speed(task.download_speed)}</b>",
+        ]
+    elif task.status == TaskStatus.DOWNLOADING:
+        lines += [
+            f"<b>⬇️ {P.bar(download_pct)} {P.percent_str(download_pct)}</b>",
+            f"<b>📥 Descargando: {P.human_size_compact(task.bytes_fetched)} / {P.human_size_compact(total)} · {P.human_speed(task.download_speed)}</b>",
+        ]
+    else:
+        lines += [
+            f"<b>⬆️ {P.bar(upload_pct)} {P.percent_str(upload_pct)}</b>",
+            f"<b>📤 Subiendo: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {P.human_speed(task.upload_speed)}</b>",
+        ]
+    lines.append(f"<b>⏳ ETA: {P.human_time_clock(eta)}</b>")
 
     detail: List[str] = []
     if task.parts_total > 1:
@@ -534,7 +559,7 @@ def settings_text(values: dict, page: int, pages: int, *, is_owner_user: bool,
     for key in keys:
         value = values[key]
         unit = units.get(key, "")
-        lines.append(f"• {esc(labels[key])}: {code(f'{value} {unit}'.strip())}")
+        lines.append(f"• {esc(labels[key])}: {code(f'{display_number(value)} {unit}'.strip())}")
     lines += [
         "",
         i("Toca un valor para pasar al siguiente. Los cambios se aplican a las "
@@ -714,6 +739,8 @@ def admin_keyboard(paused: bool) -> InlineKeyboardMarkup:
 
 def links_buttons(task: "UploadTask") -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton("📄 Descargar .txt", callback_data=f"t:links:{task.task_id}")]]
+    if task.urls and not task.deleted_from_s3:
+        rows.append([InlineKeyboardButton("🗑 Borrar de toDus", callback_data=f"t:delyes:{task.task_id}")])
     if len(task.urls) == 1:
         rows.append([InlineKeyboardButton("🔗 Abrir enlace", url=task.urls[0])])
     return InlineKeyboardMarkup(rows)

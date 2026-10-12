@@ -242,6 +242,8 @@ class UploadTask:
     def mark_started(self) -> None:
         self.started_at = time.time()
         self._mono_start = time.monotonic()
+        self.queue_position = 0
+        self.queue_length = 0
         self._meter.reset()
         self._download_meter.reset()
         self._upload_meter.reset()
@@ -269,7 +271,7 @@ class UploadTask:
 
     def _inflight_credit(self) -> float:
         """Crédito parcial de las partes en vuelo (para que la barra fluya)."""
-        if self.speed <= 0 or not self.parts_total:
+        if self.upload_speed <= 0 or not self.parts_total:
             return 0.0
         now = time.monotonic()
         credit = 0.0
@@ -279,7 +281,7 @@ class UploadTask:
             length = self.expected_part_length(part_number)
             if length <= 0:
                 continue
-            credit += min(0.92 * length, max(0.0, (now - t0) * self.speed))
+            credit += min(0.92 * length, max(0.0, (now - t0) * self.upload_speed))
         return credit
 
     def processed_bytes(self) -> int:

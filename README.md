@@ -1,4 +1,4 @@
-# ☁️ toDus S3 Uploader Bot — v2
+# ☁️ toDus Upload Bot — v2
 
 Bot de Telegram que convierte **archivos de Telegram** o **enlaces directos** en
 **enlaces de descarga directa** alojados en el S3 público de toDus
@@ -57,9 +57,9 @@ Usuario Z ─┘   │ usuario      │   │ + prioridad   │   │ sube trozo
    40 tareas activas no se inunda la API de Telegram ni el event loop.
 7. **Límite global de subidas** (`S3_GLOBAL_WORKERS`): 40 usuarios no lanzan
    300 PUT simultáneos a toDus. Ajustable en caliente con `/settings`.
-8. **Modo streaming**: descarga y sube **a la vez**, trozo a trozo. Menos disco
-   y menos tiempo total. Si el origen no soporta descargas parciales, cae
-   automáticamente al modo clásico.
+8. **Modo de trabajo**: `auto` muestra primero la descarga y luego la subida para
+   que el progreso sea claro. `stream` descarga y sube **a la vez**, trozo a trozo,
+   para ahorrar disco; se activa explícitamente desde `/settings`.
 9. **Posición + ETA por tarea**: `/cola` muestra `#3 en cola · comienza en
    ~4m 12s`, calculado con la velocidad real del bot y el trabajo pendiente.
 10. **Sobrevive a los reinicios**: el estado de la cola se guarda en disco y

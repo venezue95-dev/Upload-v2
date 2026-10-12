@@ -87,7 +87,8 @@ def bar(percent: float, width: int = BAR_WIDTH,
 
 
 def percent_str(percent: float) -> str:
-    return f"{max(0.0, min(100.0, percent or 0.0)):.1f}%"
+    value = f"{max(0.0, min(100.0, percent or 0.0)):.1f}".rstrip("0").rstrip(".")
+    return f"{value}%"
 
 
 # ----------------------------------------------------------------------

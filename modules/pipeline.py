@@ -218,9 +218,8 @@ def _choose_mode(pipeline_mode: str, source: dict, size: int, chunk_bytes: int) 
         return "stream" if size else "classic"
     if pipeline_mode == "classic":
         return "classic"
-    # auto
-    if size and size > chunk_bytes and source.get("ranges"):
-        return "stream"
+    # auto: fases separadas para que el usuario vea claramente descarga → subida.
+    # El streaming sigue disponible de forma explícita desde /settings.
     return "classic"
 
 
@@ -323,6 +322,7 @@ async def _run_classic(client, task: UploadTask, source: dict, chunk_bytes: int,
     base_name, parts = plan_parts(task.user_id, task.filename, size, chunk_bytes)
     task.s3_base = base_name
     task.plan_parts(chunk_bytes, len(parts))
+    task.status = TaskStatus.UPLOADING
     task.phase = "Subiendo"
 
     log.info(
