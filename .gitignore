@@ -1,0 +1,18 @@
+# ¡IMPORTANTE! Nunca subas credenciales ni datos de ejecución.
+.env
+*.session
+*.session-journal
+data/
+downloads/
+settings.json
+queue_state.json
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store

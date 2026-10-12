@@ -1,0 +1,23 @@
+# Archivos que NO deben subirse al desplegar con `railway up`
+.env
+*.session
+*.session-journal
+data/
+downloads/
+settings.json
+queue_state.json
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
+tests/
+README.md
+CAMBIOS.md
+DESPLIEGUE-RAILWAY.md
+docker-compose.yml

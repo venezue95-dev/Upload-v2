@@ -1,0 +1,102 @@
+"""
+basic.py
+========
+Comandos generales: /start, /menu, /help, /status, /ping.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+
+from pyrogram import Client, filters
+from pyrogram.enums import ParseMode
+from pyrogram.types import Message
+
+from config import CONFIG
+from .. import texts as T
+from ..queue import QUEUE
+from ..runtime_settings import RUNTIME_SETTINGS
+from .common import AUTHORIZED, is_owner, reply
+
+log = logging.getLogger("s3_bot.basic")
+
+_start_ts = time.time()
+
+
+def register(app: Client) -> None:
+    @app.on_message(filters.command(["start", "menu"]) & AUTHORIZED)
+    async def _start(client: Client, message: Message):
+        user = message.from_user
+        is_own = is_owner(user.id)
+        await reply(
+            message,
+            T.welcome_text(
+                user.id,
+                public=not CONFIG.allowed_users,
+                is_owner=is_own,
+                cfg=CONFIG,
+                settings=RUNTIME_SETTINGS,
+            ),
+            keyboard=T.main_menu_keyboard(is_owner_user=is_own),
+        )
+
+    @app.on_message(filters.command("help") & AUTHORIZED)
+    async def _help(client: Client, message: Message):
+        await reply(message, T.help_text(1), keyboard=T.help_keyboard(1))
+
+    @app.on_message(filters.command("ping") & AUTHORIZED)
+    async def _ping(client: Client, message: Message):
+        start = time.perf_counter()
+        sent = await message.reply_text("🏓 ...")
+        elapsed = int((time.perf_counter() - start) * 1000)
+        counts = QUEUE.counts()
+        await sent.edit_text(
+            f"🏓 <b>Pong!</b>\n"
+            f"⚡️ Latencia: {T.code(str(elapsed) + ' ms')}\n"
+            f"🧮 Cola: {T.code(str(counts['active']) + ' activas')} · "
+            f"{T.code(str(counts['waiting']) + ' en espera')}\n"
+            f"⏳ Encendido: {T.code(T._uptime(counts['uptime']))}",
+            parse_mode=ParseMode.HTML,
+        )
+
+    @app.on_message(filters.command("status") & AUTHORIZED)
+    async def _status(client: Client, message: Message):
+        note = await message.reply_text("🔍 <b>Comprobando el sistema…</b>")
+
+        try:
+            me = await client.get_me()
+            bot_line = f"✅ {T.code('@' + (me.username or str(me.id)))} en línea"
+        except Exception as exc:  # noqa: BLE001
+            bot_line = f"⚠️ {T.esc(T.shorten(str(exc), 80))}"
+
+        ok, detail = await _ping_storage()
+        storage_line = f"{'✅' if ok else '❌'} {T.esc(T.shorten(detail, 90))}"
+
+        counts = QUEUE.counts()
+        await note.edit_text(
+            T.status_text(
+                bot_line=bot_line,
+                storage_line=storage_line,
+                settings=RUNTIME_SETTINGS,
+                counts=counts,
+                paused=QUEUE.paused,
+            ),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+
+
+async def _ping_storage(timeout: float = 12.0):
+    """Comprueba el endpoint de toDus sin bloquear el event loop."""
+    try:
+        from ..pipeline import s3
+
+        return await asyncio.wait_for(
+            asyncio.to_thread(lambda: s3().ping()), timeout=timeout
+        )
+    except asyncio.TimeoutError:
+        return False, "el almacenamiento no respondió a tiempo"
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)

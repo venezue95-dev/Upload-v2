@@ -1,0 +1,14 @@
+# Cliente de Telegram (Pyrogram)
+pyrogram==2.0.106
+# Acelerador criptográfico (opcional pero muy recomendable: sube/baja más rápido)
+TgCrypto==1.2.5
+
+# Cliente toDus S3. OJO: la versión actual de la librería expone `S3Client`
+# (el bot detecta automáticamente esa API y también la antigua NamespaceManager).
+todus-client @ git+https://github.com/nyxthor-dev/todus-client.git
+# Dependencias de la librería todus (por si se instala sin resolver extras)
+tqdm>=4.50
+requests>=2.25
+
+# Variables de entorno en desarrollo local (en Docker se usa env_file)
+python-dotenv==1.0.1

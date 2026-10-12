@@ -1,0 +1,35 @@
+# docker-compose.yml — toDus S3 Uploader Bot (v2)
+#
+#   1. cp .env.example .env  &&  rellenar credenciales
+#   2. docker compose up -d --build
+#   3. docker compose logs -f
+#   4. docker compose down
+
+services:
+  s3-todus-bot:
+    build: .
+    image: s3-todus-bot:2.0
+    container_name: s3-todus-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Sesión de Pyrogram + settings.json + queue_state.json + history.db
+      - ./data:/app/data
+      # Temporales de descarga (el bot los limpia solo).
+      - ./downloads:/app/downloads
+    # STOP: al apagar, Docker manda SIGTERM y el bot guarda la cola para
+    # reanudarla en el próximo arranque (por eso el grace period amplio).
+    stop_grace_period: 60s
+    # Recursos: ajusta según tu servidor. Cada tarea usa ~1 hilo de subida
+    # + ancho de banda; con QUEUE_MAX_CONCURRENT=4 y S3_GLOBAL_WORKERS=6
+    # 2 GB / 2 CPU van bien para 20-40 usuarios.
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

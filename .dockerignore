@@ -1,0 +1,22 @@
+# No copiar al contenedor: datos locales, credenciales y pruebas.
+.env
+.git
+.gitignore
+data/
+downloads/
+tests/
+*.session
+*.db
+*.db-wal
+*.db-shm
+settings.json
+queue_state.json
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
+README.md
+CAMBIOS.md
