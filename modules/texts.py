@@ -249,10 +249,17 @@ def progress_text(task: "UploadTask") -> str:
     upload_pct = (100.0 * task.processed_bytes() / total) if total else 0.0
     lines = [header]
     upload_measured = task.bytes_transferred > 0 or task.upload_speed > 0
+    download_measured = task.bytes_fetched > 0 or task.download_speed > 0
     upload_starting = task.status == TaskStatus.UPLOADING and not upload_measured
+    download_starting = task.status == TaskStatus.DOWNLOADING and not download_measured
     if upload_starting:
         lines += [
             f"<b>📤 Subiendo parte {min(task.parts_done + 1, task.parts_total or 1)}/{task.parts_total or 1}…</b>",
+            f"<b>⏱️ Tiempo transcurrido: {P.human_time_clock(task.duration())}</b>",
+        ]
+    elif download_starting:
+        lines += [
+            "<b>📥 Descarga en curso…</b>",
             f"<b>⏱️ Tiempo transcurrido: {P.human_time_clock(task.duration())}</b>",
         ]
     elif task.mode == "stream":
@@ -272,7 +279,7 @@ def progress_text(task: "UploadTask") -> str:
             f"<b>⬆️ {P.bar(upload_pct)} {P.percent_str(upload_pct)}</b>",
             f"<b>📤 Subiendo: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {metric_speed(task.upload_speed)}</b>",
         ]
-    if not upload_starting:
+    if not upload_starting and not download_starting:
         eta_label = P.human_time_clock(eta) if eta is not None else "calculando…"
         lines.append(f"<b>⏳ ETA: {eta_label}</b>")
     if not upload_starting and task.status == TaskStatus.UPLOADING and task.parts_total and task.parts_done < task.parts_total:

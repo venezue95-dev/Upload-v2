@@ -80,6 +80,7 @@ async def _tick() -> None:
     for task in QUEUE.active_tasks():
         if task.is_final or not task.status_message_id:
             continue
+        _sync_disk_progress(task)
         if task.status.is_active:
             task.sample_speed()
 
@@ -119,6 +120,29 @@ async def _tick() -> None:
             if key not in alive:
                 _last_text.pop(key, None)
                 _last_edit.pop(key, None)
+
+
+def _sync_disk_progress(task: UploadTask) -> None:
+    """Recupera bytes escritos aunque el origen no dispare el callback."""
+    if task.status != TaskStatus.DOWNLOADING:
+        return
+    candidates = []
+    if task.mode == "stream":
+        chunks = os.path.join(CONFIG.download_dir, str(task.user_id), "chunks")
+        if os.path.isdir(chunks):
+            candidates = [
+                os.path.join(chunks, name)
+                for name in os.listdir(chunks)
+                if name.startswith(task.task_id) and name.endswith(".tmp")
+            ]
+    else:
+        candidates = [os.path.join(CONFIG.download_dir, str(task.user_id), task.filename)]
+    try:
+        written = sum(os.path.getsize(path) for path in candidates if os.path.isfile(path))
+    except OSError:
+        return
+    if written > task.bytes_fetched:
+        task.add_fetched(written - task.bytes_fetched)
 
 
 # ----------------------------------------------------------------------
