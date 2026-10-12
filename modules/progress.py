@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Optional
 
 # Ancho por defecto de las barras.
-BAR_WIDTH = 14
+BAR_WIDTH = 18
 
 
 # ----------------------------------------------------------------------
@@ -79,8 +79,8 @@ def human_time_clock(seconds: Optional[float]) -> str:
 
 
 def bar(percent: float, width: int = BAR_WIDTH,
-        filled: str = "▰", empty: str = "▱") -> str:
-    """Barra de progreso: '▰▰▰▰▰▱▱▱▱▱▱▱▱▱'."""
+        filled: str = "█", empty: str = "░") -> str:
+    """Barra de progreso compacta: '████████░░░░░░░░░░'."""
     percent = max(0.0, min(100.0, percent or 0.0))
     done = int(round(width * percent / 100.0))
     return filled * done + empty * (width - done)

@@ -14,6 +14,7 @@ Reglas de estilo:
 from __future__ import annotations
 
 import html
+import re
 from typing import List, Optional, Sequence, TYPE_CHECKING
 
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -51,8 +52,41 @@ def pre(value) -> str:
     return f"<pre>{esc(value)}</pre>"
 
 
+def _bold_non_link_text(text: str) -> str:
+    """Pone en negrita el texto visible, dejando intactos los enlaces en <pre>."""
+    parts = re.split(r"(<[^>]+>)", text)
+    result: List[str] = []
+    in_pre = False
+    in_code = False
+    bold_depth = 0
+    for part in parts:
+        if not part:
+            continue
+        if part.startswith("<") and part.endswith(">"):
+            tag = part.lower()
+            if tag.startswith("<pre"):
+                in_pre = True
+            elif tag.startswith("</pre"):
+                in_pre = False
+            elif tag.startswith("<code") and not tag.startswith("</"):
+                in_code = True
+            elif tag.startswith("</code"):
+                in_code = False
+            elif tag.startswith("<b") and not tag.startswith("</"):
+                bold_depth += 1
+            elif tag.startswith("</b"):
+                bold_depth = max(0, bold_depth - 1)
+            result.append(part)
+        elif in_pre or in_code or bold_depth or not part.strip():
+            result.append(part)
+        else:
+            result.append(f"<b>{part}</b>")
+    return "".join(result)
+
+
 def cut(text: str, limit: int = TG_LIMIT) -> str:
-    """Recorta un texto respetando el límite de Telegram."""
+    """Recorta y estiliza un mensaje respetando el límite de Telegram."""
+    text = _bold_non_link_text(text)
     if len(text) <= limit:
         return text
     return text[: limit - 20] + "\n<i>… (recortado)</i>"
@@ -178,7 +212,7 @@ HELP_PAGES = {
 
 
 def help_text(page: int) -> str:
-    return HELP_PAGES.get(page, HELP_PAGES[1]) + f"\n\n<i>Página {page}/3</i>"
+    return cut(HELP_PAGES.get(page, HELP_PAGES[1]) + f"\n\n<i>Página {page}/3</i>")
 
 
 # ----------------------------------------------------------------------
@@ -190,12 +224,12 @@ def progress_text(task: "UploadTask") -> str:
     speed = task.speed
     eta = task.eta_seconds()
 
-    header = f"<b>{esc(task.phase or 'Procesando')}</b>\n{code(shorten(task.filename, 48))}"
+    header = f"<b>{esc(task.phase or 'Procesando')}</b>\n<b>{esc(shorten(task.filename, 48))}</b>"
     lines = [
         header,
-        f"{P.bar(pct)} {P.percent_str(pct)}",
-        f"📦 {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)}",
-        f"⚡️ {P.human_speed(speed)}   ⏳ {P.human_time_clock(eta)}",
+        f"<b>{P.bar(pct)} {P.percent_str(pct)}</b>",
+        f"<b>📦 {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)}</b>",
+        f"<b>⚡️ {P.human_speed(speed)}   ⏳ {P.human_time_clock(eta)}</b>",
     ]
 
     detail: List[str] = []
@@ -215,7 +249,7 @@ def queued_text(task: "UploadTask") -> str:
     eta = task.queue_eta
     lines = [
         "<b>⏳ En cola</b>",
-        code(shorten(task.filename, 48)),
+        b(shorten(task.filename, 48)),
         f"📦 {P.human_size_compact(task.file_size) if task.file_size else 'tamaño por determinar'}",
     ]
     if task.queue_position and task.queue_length:
@@ -237,7 +271,7 @@ def final_text(task: "UploadTask") -> str:
     body = [
         head,
         "",
-        f"📄 {code(shorten(task.filename, 52))}",
+        f"<b>📄 Archivo:</b> {b(shorten(task.filename, 52))}",
         f"📦 {P.human_size_compact(task.file_size)}"
         + (f" · 🧩 {task.parts_total} partes" if task.parts_total > 1 else ""),
         f"⏱️ {P.human_time(task.duration())} · ⚡️ media {P.human_speed(task.avg_speed())}",
