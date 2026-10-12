@@ -524,16 +524,6 @@ def status_text(*, bot_line: str, storage_line: str, settings, counts: dict,
     )
 
 
-def ping_text(elapsed_ms: int, counts: dict) -> str:
-    return cut(
-        f"<b>🏓 Ping</b>\n\n"
-        f"⚡️ Latencia: {code(str(elapsed_ms) + ' ms')}\n"
-        f"🧮 Cola: {code(str(counts['active']) + ' activas')} · "
-        f"{code(str(counts['waiting']) + ' en espera')}\n"
-        f"⏳ Encendido: {code(_uptime(counts['uptime']))}"
-    )
-
-
 def top_users_text(rows: Sequence[dict], *, is_owner_user: bool, owner_id: int = 0) -> str:
     lines = [
         "<b>🏆 Top usuarios</b>",
@@ -651,7 +641,6 @@ def main_menu_keyboard(*, is_owner_user: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton("📊 Estado", callback_data="menu:status"),
             InlineKeyboardButton("📖 Ayuda", callback_data="menu:help:1"),
         ],
-        [InlineKeyboardButton("🏓 Ping", callback_data="menu:ping")],
         [InlineKeyboardButton(
             "👑 Top usuarios" if is_owner_user else "🏆 Top usuarios",
             callback_data="menu:top",
@@ -664,16 +653,6 @@ def main_menu_keyboard(*, is_owner_user: bool) -> InlineKeyboardMarkup:
         ])
         rows.append([InlineKeyboardButton("⚙️ Configuración", callback_data="menu:set")])
     return InlineKeyboardMarkup(rows)
-
-
-def ping_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📋 Mi cola", callback_data="menu:cola"),
-            InlineKeyboardButton("📊 Estado", callback_data="menu:status"),
-        ],
-        [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
-    ])
 
 
 def top_users_keyboard() -> InlineKeyboardMarkup:

@@ -121,7 +121,6 @@ ni pegar saltos.
 | `/enlaces [id]` | todos | Reenvía la lista de enlaces como `.txt` |
 | `/buscar <texto>` | todos | Busca en tu historial por nombre de archivo |
 | `/status` | todos | Estado del bot, del almacenamiento y de la cola |
-| `/ping` | todos | Latencia + resumen de la cola |
 | `/settings` | **owner** | 15 ajustes en caliente, en 3 páginas |
 | `/stats` | **owner** | Estadísticas globales + top usuarios |
 | `/usuarios` | **owner** | Lista de usuarios y su consumo |

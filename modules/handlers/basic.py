@@ -1,7 +1,7 @@
 """
 basic.py
 ========
-Comandos generales: /start, /menu, /help, /status, /ping.
+Comandos generales: /start, /menu, /help, /status.
 """
 
 from __future__ import annotations
@@ -64,18 +64,6 @@ def register(app: Client) -> None:
             message,
             "⛔️ <b>Tu cuenta está bloqueada en este bot</b>\n\n"
             "Si crees que es un error, contacta con el administrador.",
-        )
-
-    @app.on_message(filters.command("ping") & AUTHORIZED)
-    async def _ping(client: Client, message: Message):
-        start = time.perf_counter()
-        sent = await message.reply_text("🏓 ...")
-        elapsed = int((time.perf_counter() - start) * 1000)
-        counts = QUEUE.counts()
-        await sent.edit_text(
-            T.ping_text(elapsed, counts),
-            parse_mode=ParseMode.HTML,
-            reply_markup=T.ping_keyboard(),
         )
 
     @app.on_message(filters.command("status") & AUTHORIZED)

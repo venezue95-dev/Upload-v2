@@ -28,7 +28,7 @@ log = logging.getLogger("s3_bot.url")
 URL_RE = re.compile(r"https?://[^\s<>\"')]+", re.IGNORECASE)
 
 URL_FILTER = filters.regex(URL_RE) & ~filters.command(
-    ["start", "help", "status", "ping", "cola", "cancelar", "historial", "settings",
+    ["start", "help", "status", "cola", "cancelar", "historial", "settings",
      "stats", "usuarios", "anuncio", "pausar", "reanudar", "sistema", "limpiar",
      "reintentar", "menu", "enlaces"]
 )
