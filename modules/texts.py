@@ -155,16 +155,16 @@ def task_line(task: "UploadTask", index: Optional[int] = None) -> str:
 # Bienvenida / ayuda.
 # ----------------------------------------------------------------------
 def welcome_text(user_id: int, *, public: bool, is_owner: bool, cfg,
-                 settings, admin_name: str = "") -> str:
+                 settings, admin_name: str = "", user_name: str = "") -> str:
     modo = "🌍 público" if public else "🔒 privado"
     rol = "👑 owner" if is_owner else "👤 usuario"
     return cut(
         f"<b>☁️ toDus Upload</b>\n"
         f"<i>Convierte cualquier archivo o enlace en un enlace de descarga directa.</i>\n\n"
         f"<b>👤 Tu cuenta</b>\n"
-        f"• ID: {code(user_id)}\n"
+        f"• Usuario: {b(user_name or 'Usuario')}\n"
         f"• Rol: {esc(rol)} · Modo: {esc(modo)}\n"
-        f"• 👑 Administrador: {b(admin_name or str(cfg.owner_id or 'no configurado'))}\n\n"
+        f"• 👑 Administrador: {b(admin_name or 'Administrador')}\n\n"
         f"<b>🚀 Cómo usarlo</b>\n"
         f"1️⃣ Reenvía (o envía) un <b>documento / vídeo / audio</b>.\n"
         f"2️⃣ O pega uno o varios <b>enlaces http(s)</b> directos.\n"
@@ -177,6 +177,7 @@ def welcome_text(user_id: int, *, public: bool, is_owner: bool, cfg,
         f"<b>🧭 Comandos</b>\n"
         f"/cola — tus tareas y la posición en la cola\n"
         f"/historial — tus últimas subidas (con enlaces)\n"
+        f"/archivos — ver y gestionar tus archivos subidos\n"
         f"/cancelar — cancelar todo lo tuyo\n"
         f"/status — estado del bot y del almacenamiento\n"
         f"/settings — configuración (owner)\n"
@@ -489,6 +490,33 @@ def _rel_time(ts: Optional[float]) -> str:
     return f"hace {delta // 86400}d"
 
 
+def files_text(rows: Sequence[dict], page: int, per_page: int, *, is_owner_user: bool) -> str:
+    total_pages = max(1, (len(rows) + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+    chunk = rows[(page - 1) * per_page : page * per_page]
+    if not rows:
+        return (
+            "<b>📁 Archivos subidos</b>\n\n"
+            + ("Todavía no hay archivos disponibles." if is_owner_user
+               else "Todavía no tienes archivos disponibles.")
+        )
+    title = "📁 Todos los archivos subidos" if is_owner_user else "📁 Mis archivos subidos"
+    lines = [f"<b>{title} ({len(rows)})</b>", ""]
+    for idx, row in enumerate(chunk, start=1 + (page - 1) * per_page):
+        who = ""
+        if is_owner_user:
+            username = row.get("username") or "usuario"
+            who = f" · {esc('@' + username if not str(username).startswith('@') else username)}"
+        lines.append(
+            f"<b>{idx}.</b> {code(shorten(row.get('filename') or 'archivo', 38))}"
+            f" · {P.human_size_compact(int(row.get('file_size', 0) or 0))}{who}"
+        )
+    lines += ["", i("Usa /eliminar 1,3 para borrar posiciones concretas.")]
+    lines.append(i("Usa /eliminar todo para borrar todo lo permitido."))
+    lines.append(i(f"Página {page}/{total_pages}"))
+    return cut("\n".join(lines))
+
+
 # ----------------------------------------------------------------------
 # Estado / estadísticas.
 # ----------------------------------------------------------------------
@@ -528,7 +556,14 @@ def status_text(*, bot_line: str, storage_line: str, settings, counts: dict,
     )
 
 
-def quota_text(*, used: int, limit: int) -> str:
+def quota_text(*, used: int, limit: int, is_owner_user: bool = False) -> str:
+    if is_owner_user:
+        return cut(
+            "<b>📊 Cuota del administrador</b>\n\n"
+            "• Límite: <b>sin límite</b>\n"
+            "• Tus subidas no están sujetas a la cuota diaria.\n\n"
+            + i("El administrador conserva acceso completo al almacenamiento.")
+        )
     if limit <= 0:
         return cut(
             "<b>📊 Mi cuota</b>\n\n"
@@ -660,6 +695,7 @@ def main_menu_keyboard(*, is_owner_user: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton("📋 Mi cola", callback_data="menu:cola"),
             InlineKeyboardButton("🗂 Historial", callback_data="menu:hist"),
         ],
+        [InlineKeyboardButton("📁 Mis archivos", callback_data="menu:files")],
         [
             InlineKeyboardButton("📊 Estado", callback_data="menu:status"),
             InlineKeyboardButton("📖 Ayuda", callback_data="menu:help:1"),
@@ -839,6 +875,47 @@ def history_keyboard(page: int, pages: int, rows: Sequence[dict] = ()) -> Inline
     buttons.append(nav)
     buttons.append([InlineKeyboardButton("🏠 Menú", callback_data="menu:home")])
     return InlineKeyboardMarkup(buttons)
+
+
+def files_keyboard(page: int, pages: int, rows: Sequence[dict], *, is_owner_user: bool) -> InlineKeyboardMarkup:
+    buttons: List[List[InlineKeyboardButton]] = []
+    chunk = rows[(page - 1) * 8 : page * 8]
+    for idx, row in enumerate(chunk, start=1 + (page - 1) * 8):
+        buttons.append([
+            InlineKeyboardButton(f"🔗 Enlaces {idx}", callback_data=f"files:links:{row['task_id']}"),
+        ])
+    nav: List[InlineKeyboardButton] = []
+    if page > 1:
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"files:page:{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page}/{pages}", callback_data="noop"))
+    if page < pages:
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"files:page:{page+1}"))
+    buttons.append(nav)
+    buttons.append([InlineKeyboardButton("🗑 Borrar por posiciones", callback_data="files:help")])
+    buttons.append([InlineKeyboardButton(
+        "🧹 Borrar todo excepto mis archivos" if is_owner_user else "🧹 Borrar todos mis archivos",
+        callback_data="files:all",
+    )])
+    buttons.append([InlineKeyboardButton("🏠 Menú", callback_data="menu:home")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def files_delete_all_confirm_keyboard(*, is_owner_user: bool) -> InlineKeyboardMarkup:
+    label = "✅ Sí, borrar todo excepto mis archivos" if is_owner_user else "✅ Sí, borrar todos"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(label, callback_data="files:confirmall"),
+         InlineKeyboardButton("↩️ No", callback_data="menu:files")],
+        [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
+    ])
+
+
+def files_delete_positions_confirm_keyboard(positions: Sequence[int]) -> InlineKeyboardMarkup:
+    encoded = ",".join(str(p) for p in positions)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Sí, eliminar", callback_data=f"files:confirmpos:{encoded}"),
+         InlineKeyboardButton("↩️ No", callback_data="menu:files")],
+        [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
+    ])
 
 
 def settings_keyboard(keys: Sequence[str], values: dict, labels: dict, units: dict,

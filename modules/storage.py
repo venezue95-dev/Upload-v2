@@ -209,6 +209,31 @@ def user_recent(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
     return [_row(r) for r in rows]
 
 
+def uploaded_files(user_id: Optional[int] = None, limit: int = 500) -> List[Dict[str, Any]]:
+    """Lista subidas completadas que todavía conservan sus objetos en S3."""
+    conn = _conn()
+    with _LOCK:
+        if user_id is None:
+            rows = conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE status='completed' AND keys <> '' AND urls <> ''
+                ORDER BY finished_at DESC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE user_id=? AND status='completed' AND keys <> '' AND urls <> ''
+                ORDER BY finished_at DESC LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+    return [_row(r) for r in rows]
+
+
 def get_task(task_id: str, user_id: int) -> Optional[Dict[str, Any]]:
     """Obtiene una tarea histórica únicamente si pertenece al usuario."""
     conn = _conn()

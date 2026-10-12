@@ -22,7 +22,7 @@ from ..runtime_settings import (
     RUNTIME_SETTINGS,
     SETTINGS_PAGES,
 )
-from .common import AUTHORIZED, is_owner, reply
+from .common import OWNER, is_owner, reply
 
 
 def build_settings_view(page: int, *, is_owner_user: bool) -> Tuple[str, object]:
@@ -45,7 +45,7 @@ def build_settings_view(page: int, *, is_owner_user: bool) -> Tuple[str, object]
 
 
 def register(app: Client) -> None:
-    @app.on_message(filters.command("settings") & AUTHORIZED)
+    @app.on_message(filters.command("settings") & OWNER)
     async def _settings(client: Client, message: Message):
         is_own = is_owner(message.from_user.id)
         text, keyboard = build_settings_view(1, is_owner_user=is_own)
