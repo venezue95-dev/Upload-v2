@@ -730,7 +730,10 @@ def task_keyboard(task: "UploadTask", *, is_owner_user: bool) -> InlineKeyboardM
         rows.append([InlineKeyboardButton("🔁 Reintentar", callback_data=f"t:retry:{task.task_id}")])
     if is_owner_user and task.status in (TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.COMPLETED):
         rows.append([InlineKeyboardButton("🧹 Quitar de la lista", callback_data=f"t:drop:{task.task_id}")])
-    rows.append([InlineKeyboardButton("⬅️ Mi cola", callback_data="cola:refresh")])
+    rows.append([
+        InlineKeyboardButton("⬅️ Mi cola", callback_data="cola:refresh"),
+        InlineKeyboardButton("🏠 Menú", callback_data="menu:home"),
+    ])
     return InlineKeyboardMarkup(rows)
 
 
@@ -738,21 +741,21 @@ def cancel_all_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Sí, cancelar todo", callback_data="cola:cancelall:yes"),
         InlineKeyboardButton("↩️ No", callback_data="cola:refresh"),
-    ]])
+    ], [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")]])
 
 
 def delete_confirm_keyboard(task_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Sí, borrar de S3", callback_data=f"t:delyes:yes:{task_id}"),
         InlineKeyboardButton("↩️ No", callback_data=f"t:card:{task_id}"),
-    ]])
+    ], [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")]])
 
 
 def history_delete_confirm_keyboard(task_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Sí, borrar", callback_data=f"hist:delete:yes:{task_id}"),
         InlineKeyboardButton("↩️ No", callback_data="menu:hist"),
-    ]])
+    ], [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")]])
 
 
 def history_keyboard(page: int, pages: int, rows: Sequence[dict] = ()) -> InlineKeyboardMarkup:
@@ -811,6 +814,7 @@ def admin_keyboard(paused: bool) -> InlineKeyboardMarkup:
         [toggle, InlineKeyboardButton("📈 Stats", callback_data="menu:stats")],
         [InlineKeyboardButton("🖥 Sistema", callback_data="menu:sys"),
          InlineKeyboardButton("🌍 Cola global", callback_data="cola:global")],
+        [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
     ])
 
 
@@ -824,10 +828,12 @@ def links_buttons(task: "UploadTask") -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("🗑 Borrar de toDus", callback_data=f"t:delyes:{task.task_id}")])
     if len(task.urls) == 1:
         rows.append([InlineKeyboardButton("🔗 Abrir enlace", url=task.urls[0])])
+    rows.append([InlineKeyboardButton("🏠 Menú", callback_data="menu:home")])
     return InlineKeyboardMarkup(rows)
 
 
 def progress_keyboard(task_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🛑 Cancelar", callback_data=f"t:cancel:{task_id}"),
-    ]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛑 Cancelar", callback_data=f"t:cancel:{task_id}")],
+        [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
+    ])

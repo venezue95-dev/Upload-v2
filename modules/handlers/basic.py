@@ -75,11 +75,15 @@ def register(app: Client) -> None:
         await sent.edit_text(
             T.ping_text(elapsed, counts),
             parse_mode=ParseMode.HTML,
+            reply_markup=T.main_menu_keyboard(is_owner_user=is_owner(message.from_user.id)),
         )
 
     @app.on_message(filters.command("status") & AUTHORIZED)
     async def _status(client: Client, message: Message):
-        note = await message.reply_text("🔍 <b>Comprobando el sistema…</b>")
+        note = await message.reply_text(
+            "🔍 <b>Comprobando el sistema…</b>",
+            reply_markup=T.main_menu_keyboard(is_owner_user=is_owner(message.from_user.id)),
+        )
 
         try:
             me = await client.get_me()
@@ -104,6 +108,7 @@ def register(app: Client) -> None:
             ),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
+            reply_markup=T.main_menu_keyboard(is_owner_user=is_owner(message.from_user.id)),
         )
 
 
