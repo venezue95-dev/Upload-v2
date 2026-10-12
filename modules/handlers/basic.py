@@ -70,7 +70,7 @@ def register(app: Client) -> None:
     async def _status(client: Client, message: Message):
         note = await message.reply_text(
             "🔍 <b>Comprobando el sistema…</b>",
-            reply_markup=T.main_menu_keyboard(is_owner_user=is_owner(message.from_user.id)),
+            reply_markup=T.status_keyboard(is_owner_user=is_owner(message.from_user.id)),
         )
 
         try:
@@ -96,7 +96,7 @@ def register(app: Client) -> None:
             ),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
-            reply_markup=T.main_menu_keyboard(is_owner_user=is_owner(message.from_user.id)),
+            reply_markup=T.status_keyboard(is_owner_user=is_owner(message.from_user.id)),
         )
 
 

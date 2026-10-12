@@ -528,6 +528,25 @@ def status_text(*, bot_line: str, storage_line: str, settings, counts: dict,
     )
 
 
+def quota_text(*, used: int, limit: int) -> str:
+    if limit <= 0:
+        return cut(
+            "<b>📊 Mi cuota</b>\n\n"
+            f"• Usado en las últimas 24 horas: <b>{P.human_size(used)}</b>\n"
+            "• Límite: <b>sin límite</b>\n\n"
+            + i("La cuota, si se configura, se calcula sobre una ventana móvil de 24 horas.")
+        )
+    remaining = max(0, limit - used)
+    pct = min(100.0, used * 100.0 / limit)
+    return cut(
+        "<b>📊 Mi cuota diaria</b>\n\n"
+        f"• Usado: <b>{P.human_size(used)}</b> de <b>{P.human_size(limit)}</b>\n"
+        f"• Disponible: <b>{P.human_size(remaining)}</b>\n"
+        f"• Consumo: <b>{pct:.1f}%</b>\n\n"
+        + i("Se calcula sobre las últimas 24 horas y se actualiza al completar subidas.")
+    )
+
+
 def top_users_text(rows: Sequence[dict], *, is_owner_user: bool, owner_id: int = 0) -> str:
     lines = [
         "<b>🏆 Top usuarios</b>",
@@ -538,7 +557,7 @@ def top_users_text(rows: Sequence[dict], *, is_owner_user: bool, owner_id: int =
         lines.append("Todavía no hay datos suficientes.")
     else:
         for idx, row in enumerate(rows, start=1):
-            marker = " 👑" if is_owner_user and int(row.get("user_id", 0)) == owner_id else ""
+            marker = " 👑" if int(row.get("user_id", 0)) == owner_id else ""
             lines.append(
                 f"{idx}. {code(str(row.get('user_id', '—')))}{marker} · "
                 f"{P.human_size(int(row.get('bytes', 0) or 0))} · "
@@ -649,6 +668,7 @@ def main_menu_keyboard(*, is_owner_user: bool) -> InlineKeyboardMarkup:
             "👑 Top usuarios" if is_owner_user else "🏆 Top usuarios",
             callback_data="menu:top",
         )],
+        [InlineKeyboardButton("📊 Mi cuota", callback_data="menu:quota")],
     ]
     if is_owner_user:
         rows.append([
@@ -663,6 +683,24 @@ def top_users_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
     ])
+
+
+def quota_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏆 Top usuarios", callback_data="menu:top")],
+        [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
+    ])
+
+
+def status_keyboard(*, is_owner_user: bool) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton("📊 Mi cuota", callback_data="menu:quota")]]
+    if is_owner_user:
+        rows.append([
+            InlineKeyboardButton("📈 Stats", callback_data="menu:stats"),
+            InlineKeyboardButton("🖥 Sistema", callback_data="menu:sys"),
+        ])
+    rows.append([InlineKeyboardButton("🏠 Menú", callback_data="menu:home")])
+    return InlineKeyboardMarkup(rows)
 
 
 def help_keyboard(page: int) -> InlineKeyboardMarkup:

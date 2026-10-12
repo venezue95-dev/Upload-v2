@@ -79,9 +79,12 @@ def register(app: Client) -> None:
                 + T.i("Se enviará a todos los usuarios que han usado el bot."),
             )
             return
-        ids = QUEUE.user_ids()
+        # Incluye usuarios históricos, no solo tareas que sigan en memoria.
+        ids = storage.all_user_ids(CONFIG)
+        if not ids:
+            ids = QUEUE.user_ids()
         sent = failed = 0
-        await reply(message, f"📣 Enviando a {len(ids)} usuarios…")
+        progress = await reply(message, f"📣 Enviando a {len(ids)} usuarios…")
         for user_id in ids:
             try:
                 await client.send_message(
@@ -93,7 +96,13 @@ def register(app: Client) -> None:
             except Exception:  # noqa: BLE001
                 failed += 1
             await asyncio.sleep(0.05)   # evita el flood control
-        await reply(message, f"✅ Enviado a {sent} usuarios · ❌ {failed} fallidos")
+        await reply(
+            message,
+            f"✅ <b>Anuncio finalizado</b>\n\n"
+            f"• Enviados: <b>{sent}</b>\n"
+            f"• Fallidos: <b>{failed}</b>",
+            keyboard=T.admin_keyboard(QUEUE.paused),
+        )
 
     @app.on_message(filters.command("pausar") & OWNER)
     async def _pausar(client: Client, message: Message):
@@ -122,7 +131,7 @@ def register(app: Client) -> None:
     @app.on_message(filters.command(["sistema", "sys"]) & OWNER)
     async def _sistema(client: Client, message: Message):
         info = await asyncio.to_thread(_system_info)
-        await reply(message, T.system_text(info))
+        await reply(message, T.system_text(info), keyboard=T.admin_keyboard(QUEUE.paused))
 
     @app.on_message(filters.command(["ban", "bloquear"]) & OWNER)
     async def _ban(client: Client, message: Message):

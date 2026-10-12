@@ -667,7 +667,12 @@ class QueueManager:
 
         Motivos de rechazo: cola pausada, cupo del usuario, cola global llena.
         """
-        if self.paused:
+        owner = (
+            self.cfg.owner_id is not None
+            and task.user_id == self.cfg.owner_id
+            and task.priority >= self.cfg.queue.owner_priority
+        )
+        if self.paused and not owner:
             return False, (
                 "⏸ <b>La cola está pausada</b> por el administrador.\n"
                 "Intenta de nuevo en unos minutos."
@@ -677,7 +682,7 @@ class QueueManager:
         max_active = RUNTIME_SETTINGS.max_active_per_user
         max_waiting = RUNTIME_SETTINGS.max_queue_per_user
 
-        if active + waiting >= max_active + max_waiting:
+        if not owner and active + waiting >= max_active + max_waiting:
             return False, (
                 f"🚦 <b>Límite alcanzado</b>\n\n"
                 f"Ya tienes <b>{active + waiting}</b> tareas "
@@ -686,7 +691,7 @@ class QueueManager:
             )
 
         total_outstanding = len(self._waiting) + len(self._running)
-        if total_outstanding >= RUNTIME_SETTINGS.max_queue_total:
+        if not owner and total_outstanding >= RUNTIME_SETTINGS.max_queue_total:
             return False, (
                 "🌩 <b>El sistema está saturado ahora mismo</b>\n\n"
                 f"Hay {total_outstanding} tareas en cola (máximo "
@@ -817,6 +822,9 @@ class QueueManager:
     # ------------------------------------------------------------------
     def _effective_priority(self, task: UploadTask) -> float:
         """Prioridad + antigüedad (anti-inanición: +1 cada minuto de espera)."""
+        if (self.cfg.owner_id is not None and task.user_id == self.cfg.owner_id
+                and task.priority >= self.cfg.queue.owner_priority):
+            return 1_000_000.0
         waited_min = (time.time() - task.queued_at) / 60.0
         return task.priority + waited_min
 
@@ -829,25 +837,37 @@ class QueueManager:
         archivos. Dentro de cada grupo manda la prioridad (owner) y la
         antigüedad (anti-inanición).
         """
+        is_owner = (
+            self.cfg.owner_id is not None and task.user_id == self.cfg.owner_id
+            and task.priority >= self.cfg.queue.owner_priority
+        )
         fairness = (
-            self._user_active.get(task.user_id, 0)
-            if self.cfg.queue.fair_scheduling
-            else 0
+            0 if is_owner else self._user_active.get(task.user_id, 0)
+            if self.cfg.queue.fair_scheduling else 0
         )
         return (fairness, -self._effective_priority(task), task.queued_at)
 
     def _pick_next(self) -> Optional[UploadTask]:
         settings = RUNTIME_SETTINGS
-        if len(self._running) >= settings.max_concurrent_tasks:
+        owner_waiting = any(
+            self.cfg.owner_id is not None and t.user_id == self.cfg.owner_id
+            and t.priority >= self.cfg.queue.owner_priority
+            for t in self._waiting
+        )
+        if len(self._running) >= settings.max_concurrent_tasks and not owner_waiting:
             return None
-        if self.paused:
+        if self.paused and not owner_waiting:
             return None
 
         candidates = []
         for task in self._waiting:
             if task.is_cancelled:
                 continue
-            if self._user_active.get(task.user_id, 0) >= settings.max_active_per_user:
+            is_owner = (
+                self.cfg.owner_id is not None and task.user_id == self.cfg.owner_id
+                and task.priority >= self.cfg.queue.owner_priority
+            )
+            if not is_owner and self._user_active.get(task.user_id, 0) >= settings.max_active_per_user:
                 continue
             candidates.append(task)
         if not candidates:

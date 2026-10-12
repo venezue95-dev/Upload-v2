@@ -150,8 +150,20 @@ async def _menu(client: Client, cq: CallbackQuery, data: str, user_id: int) -> N
             counts=QUEUE.counts(),
             paused=QUEUE.paused,
         )
-        keyboard = T.admin_keyboard(QUEUE.paused) if can_manage(user_id) else None
+        keyboard = T.status_keyboard(
+            is_owner_user=is_own,
+        )
         await _edit(cq, text, keyboard)
+        return
+
+    if action == "quota":
+        limit = int(RUNTIME_SETTINGS.get("daily_quota_mb", 0) or 0) * 1024 * 1024
+        await cq.answer("📊 Consultando cuota…")
+        await _edit(
+            cq,
+            T.quota_text(used=storage.bytes_today(user_id), limit=limit),
+            T.quota_keyboard(),
+        )
         return
 
     if action == "top":

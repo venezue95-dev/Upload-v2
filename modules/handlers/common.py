@@ -119,7 +119,8 @@ async def check_limits(user_id: int, message: Message,
     Puertas de entrada antes de crear una tarea: mantenimiento, baneo,
     cuota diaria, anti-spam y cupos de cola. True = puede continuar.
     """
-    if RUNTIME_SETTINGS.get("maintenance", False) and not can_manage(user_id):
+    owner = can_manage(user_id)
+    if RUNTIME_SETTINGS.get("maintenance", False) and not owner:
         await reply(
             message,
             "🛠 <b>Mantenimiento en curso</b>\n\n"
@@ -137,7 +138,7 @@ async def check_limits(user_id: int, message: Message,
         return False
 
     quota_mb = int(RUNTIME_SETTINGS.get("daily_quota_mb", 0) or 0)
-    if quota_mb > 0 and incoming_bytes > 0:
+    if not owner and quota_mb > 0 and incoming_bytes > 0:
         used = storage.bytes_today(user_id)
         limit = quota_mb * 1024 * 1024
         if used + incoming_bytes > limit:
@@ -153,7 +154,7 @@ async def check_limits(user_id: int, message: Message,
             )
             return False
 
-    remaining = QUEUE.check_rate_limit(user_id)
+    remaining = None if owner else QUEUE.check_rate_limit(user_id)
     if remaining is not None:
         await reply(
             message,
@@ -163,7 +164,7 @@ async def check_limits(user_id: int, message: Message,
         return False
 
     active, waiting = QUEUE.user_load(user_id)
-    if active + waiting >= RUNTIME_SETTINGS.max_active_per_user + RUNTIME_SETTINGS.max_queue_per_user:
+    if not owner and active + waiting >= RUNTIME_SETTINGS.max_active_per_user + RUNTIME_SETTINGS.max_queue_per_user:
         await reply(
             message,
             f"🚦 <b>Límite alcanzado</b>\n\n"
