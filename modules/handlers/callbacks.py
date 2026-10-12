@@ -202,19 +202,27 @@ async def _cola(client: Client, cq: CallbackQuery, data: str, user_id: int) -> N
 
     if action.startswith("cancelall"):
         if action == "cancelall:yes":
-            count = QUEUE.cancel_user(user_id)
+            if is_owner(user_id):
+                count = QUEUE.cancel_all()
+                scope = "toda la cola"
+            else:
+                count = QUEUE.cancel_user(user_id)
+                scope = "tus tareas"
             await cq.answer(f"🛑 {count} tarea(s) canceladas")
-            text, keyboard = build_queue_view(user_id, 1, is_owner_user=is_own)
+            text, keyboard = build_queue_view(
+                user_id, 1, is_owner_user=is_own,
+                global_view=is_owner(user_id) and scope == "toda la cola",
+            )
             await _edit(cq, text, keyboard)
             return
-        pending = QUEUE.user_active_tasks(user_id)
+        pending = QUEUE.active_tasks() if is_owner(user_id) else QUEUE.user_active_tasks(user_id)
         if not pending:
-            await cq.answer("📭 No tienes tareas en curso.")
+            await cq.answer("📭 No hay tareas en curso." if is_owner(user_id) else "📭 No tienes tareas en curso.")
             return
         await cq.answer()
         await _edit(
             cq,
-            f"<b>🛑 ¿Cancelar tus {len(pending)} tarea(s)?</b>\n\n"
+            f"<b>🛑 ¿Cancelar {'toda la cola' if is_owner(user_id) else 'tus ' + str(len(pending)) + ' tarea(s)'}?</b>\n\n"
             + "\n".join(
                 f"• {T.code(T.shorten(t.filename, 36))} — {T.esc(T.STATUS_LABEL[t.status])}"
                 for t in pending[:10]
@@ -316,6 +324,7 @@ async def _delete_from_s3(cq: CallbackQuery, task) -> None:
     ok, failed = await asyncio.to_thread(s3.delete_keys, list(task.keys))
     task.deleted_from_s3 = True
     task.urls = []
+    storage.mark_deleted(task.task_id)
     await _edit(
         cq,
         f"<b>🗑 Borrado del almacenamiento</b>\n\n"

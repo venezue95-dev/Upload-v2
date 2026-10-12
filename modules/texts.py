@@ -248,7 +248,14 @@ def progress_text(task: "UploadTask") -> str:
     download_pct = (100.0 * task.bytes_fetched / total) if total else 0.0
     upload_pct = (100.0 * task.processed_bytes() / total) if total else 0.0
     lines = [header]
-    if task.mode == "stream":
+    upload_measured = task.bytes_transferred > 0 or task.upload_speed > 0
+    upload_starting = task.status == TaskStatus.UPLOADING and not upload_measured
+    if upload_starting:
+        lines += [
+            f"<b>📤 Subiendo parte {min(task.parts_done + 1, task.parts_total or 1)}/{task.parts_total or 1}…</b>",
+            f"<b>⏱️ Tiempo transcurrido: {P.human_time_clock(task.duration())}</b>",
+        ]
+    elif task.mode == "stream":
         lines += [
             f"<b>⬆️ {P.bar(upload_pct)} {P.percent_str(upload_pct)}</b>",
             f"<b>📤 Subido: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {metric_speed(task.upload_speed)}</b>",
@@ -265,9 +272,10 @@ def progress_text(task: "UploadTask") -> str:
             f"<b>⬆️ {P.bar(upload_pct)} {P.percent_str(upload_pct)}</b>",
             f"<b>📤 Subiendo: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {metric_speed(task.upload_speed)}</b>",
         ]
-    eta_label = P.human_time_clock(eta) if eta is not None else "calculando…"
-    lines.append(f"<b>⏳ ETA: {eta_label}</b>")
-    if task.status == TaskStatus.UPLOADING and task.parts_total and task.parts_done < task.parts_total:
+    if not upload_starting:
+        eta_label = P.human_time_clock(eta) if eta is not None else "calculando…"
+        lines.append(f"<b>⏳ ETA: {eta_label}</b>")
+    if not upload_starting and task.status == TaskStatus.UPLOADING and task.parts_total and task.parts_done < task.parts_total:
         lines.append(f"<b>🧩 Parte {min(task.parts_done + 1, task.parts_total)}/{task.parts_total} en subida</b>")
 
     detail: List[str] = []
@@ -628,14 +636,19 @@ def queue_keyboard(tasks: Sequence["UploadTask"], page: int, per_page: int,
                 ),
             ])
         elif task.status == TaskStatus.COMPLETED:
-            rows.append([
-                InlineKeyboardButton(
-                    f"📄 Enlaces {idx}", callback_data=f"t:links:{task.task_id}"
-                ),
-                InlineKeyboardButton(
-                    f"🗑 Borrar {idx}", callback_data=f"t:delyes:{task.task_id}"
-                ),
-            ])
+            if task.deleted_from_s3 or not task.urls:
+                rows.append([InlineKeyboardButton(
+                    f"🗂 Historial {idx}", callback_data="menu:hist"
+                )])
+            else:
+                rows.append([
+                    InlineKeyboardButton(
+                        f"📄 Enlaces {idx}", callback_data=f"t:links:{task.task_id}"
+                    ),
+                    InlineKeyboardButton(
+                        f"🗑 Borrar {idx}", callback_data=f"t:delyes:{task.task_id}"
+                    ),
+                ])
         elif task.status == TaskStatus.FAILED:
             rows.append([
                 InlineKeyboardButton(
@@ -661,6 +674,7 @@ def queue_keyboard(tasks: Sequence["UploadTask"], page: int, per_page: int,
             actions.append(InlineKeyboardButton("🌍 Vista global", callback_data="cola:global"))
     else:
         actions.append(InlineKeyboardButton("🔄 Refrescar", callback_data="cola:global"))
+        actions.append(InlineKeyboardButton("🛑 Cancelar todo", callback_data="cola:cancelall"))
         actions.append(InlineKeyboardButton("◀️ Mi cola", callback_data="cola:refresh"))
     rows.append(actions)
     rows.append([InlineKeyboardButton("🏠 Menú", callback_data="menu:home")])
@@ -672,10 +686,13 @@ def task_keyboard(task: "UploadTask", *, is_owner_user: bool) -> InlineKeyboardM
     if task.status in (TaskStatus.QUEUED, TaskStatus.DOWNLOADING, TaskStatus.UPLOADING):
         rows.append([InlineKeyboardButton("🛑 Cancelar", callback_data=f"t:cancel:{task.task_id}")])
     if task.status == TaskStatus.COMPLETED:
-        rows.append([
-            InlineKeyboardButton("📄 Enlaces .txt", callback_data=f"t:links:{task.task_id}"),
-            InlineKeyboardButton("🗑 Borrar de S3", callback_data=f"t:delyes:{task.task_id}"),
-        ])
+        if task.deleted_from_s3 or not task.urls:
+            rows.append([InlineKeyboardButton("🗂 Mi historial", callback_data="menu:hist")])
+        else:
+            rows.append([
+                InlineKeyboardButton("📄 Enlaces .txt", callback_data=f"t:links:{task.task_id}"),
+                InlineKeyboardButton("🗑 Borrar de S3", callback_data=f"t:delyes:{task.task_id}"),
+            ])
     if task.status in (TaskStatus.FAILED, TaskStatus.CANCELLED):
         rows.append([InlineKeyboardButton("🔁 Reintentar", callback_data=f"t:retry:{task.task_id}")])
     if is_owner_user and task.status in (TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.COMPLETED):
@@ -746,9 +763,13 @@ def admin_keyboard(paused: bool) -> InlineKeyboardMarkup:
 
 
 def links_buttons(task: "UploadTask") -> InlineKeyboardMarkup:
+    if not task.urls or task.deleted_from_s3:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗂 Mi historial", callback_data="menu:hist")],
+            [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
+        ])
     rows = [[InlineKeyboardButton("📄 Descargar .txt", callback_data=f"t:links:{task.task_id}")]]
-    if task.urls and not task.deleted_from_s3:
-        rows.append([InlineKeyboardButton("🗑 Borrar de toDus", callback_data=f"t:delyes:{task.task_id}")])
+    rows.append([InlineKeyboardButton("🗑 Borrar de toDus", callback_data=f"t:delyes:{task.task_id}")])
     if len(task.urls) == 1:
         rows.append([InlineKeyboardButton("🔗 Abrir enlace", url=task.urls[0])])
     return InlineKeyboardMarkup(rows)

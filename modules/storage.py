@@ -158,6 +158,17 @@ def record_task(task, cfg=None) -> None:
         log.warning("record_task falló: %s", exc)
 
 
+def mark_deleted(task_id: str) -> None:
+    """Elimina del historial persistido las claves y URLs borradas de toDus."""
+    try:
+        conn = _conn()
+        with _LOCK:
+            conn.execute("UPDATE tasks SET keys='', urls='' WHERE task_id=?", (task_id,))
+            conn.commit()
+    except Exception as exc:  # pragma: no cover
+        log.warning("mark_deleted falló: %s", exc)
+
+
 # ----------------------------------------------------------------------
 # Lectura.
 # ----------------------------------------------------------------------
