@@ -176,11 +176,11 @@ async def main() -> int:
           f"(estimada {speeds[0]/1024/1024:.2f} vs real {REAL_SPEED/1024/1024:.2f} MB/s)")
     check("las primeras muestras se marcan como estimadas",
           samples[0]["estimated"] is True)
-    check("el texto avisa de que la velocidad es estimada",
-          "estimada" in samples[0]["text"] or "~" in samples[0]["text"],
-          repr(samples[0]["text"][:120]))
-    check("el texto trae la barra desde el primer refresco",
-          "⬡" in samples[0]["text"])
+    check("la subida informa que está en proceso",
+          "Subida en proceso" in samples[0]["text"])
+    check("la subida no inventa barra, velocidad ni ETA",
+          "⬡" not in samples[0]["text"] and "MB/s" not in samples[0]["text"]
+          and "Restante:" not in samples[0]["text"])
     check("hay ETA desde las primeras muestras",
           sum(1 for s in samples if s["eta"] is not None) >= len(samples) - 1)
 

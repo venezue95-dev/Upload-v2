@@ -247,9 +247,9 @@ def progress_text(task: "UploadTask") -> str:
     """
     Mensaje de progreso (se refresca cada pocos segundos).
 
-    Reglas de honestidad: si la velocidad de subida todavía no se ha medido en
-    esta tarea (el primer PUT no ha terminado), se muestra con "~" porque es
-    una estimación basada en la velocidad aprendida del servidor.
+    La subida a toDus no informa bytes intermedios de forma fiable. Por eso la
+    vista de subida no inventa porcentaje, velocidad ni ETA: solo indica que
+    el procesamiento continúa. La descarga sí conserva sus métricas reales.
     """
     total = task.file_size or 0
     estimated = task.is_estimated()
@@ -260,10 +260,14 @@ def progress_text(task: "UploadTask") -> str:
         f"<b>{esc(shorten(task.filename, 48))}</b>",
     ]
 
-    # `priming` es solo informativo: al empezar no hay nada medido todavía,
-    # pero la barra SÍ se muestra (con la estimación de velocidad aprendida),
-    # que es justo lo que faltaba antes: con un archivo de una sola parte el
-    # mensaje se quedaba en "tiempo transcurrido" sin barra ni velocidad.
+    if task.status == TaskStatus.UPLOADING:
+        lines += [
+            "<b>⏳ Subida en proceso…</b>",
+            "<i>toDus está procesando el archivo. Se actualizará al finalizar.</i>",
+        ]
+        return cut("\n".join(lines))
+
+    # La descarga sí utiliza bytes y velocidad medidos.
     priming = total > 0 and task.processed_bytes() <= 0 and task.bytes_fetched <= 0
     upload_pct = 100.0 * task.processed_bytes() / total if total else 0.0
     download_pct = task.download_percent()
