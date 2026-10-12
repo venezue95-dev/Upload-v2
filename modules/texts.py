@@ -642,6 +642,16 @@ def main_menu_keyboard(*, is_owner_user: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def ping_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 Mi cola", callback_data="menu:cola"),
+            InlineKeyboardButton("📊 Estado", callback_data="menu:status"),
+        ],
+        [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
+    ])
+
+
 def help_keyboard(page: int) -> InlineKeyboardMarkup:
     nav = []
     if page > 1:

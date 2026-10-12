@@ -162,7 +162,7 @@ async def _menu(client: Client, cq: CallbackQuery, data: str, user_id: int) -> N
         await _edit(
             cq,
             T.ping_text(elapsed, QUEUE.counts()),
-            T.main_menu_keyboard(is_owner_user=is_owner(user_id)),
+            T.ping_keyboard(),
         )
         return
 

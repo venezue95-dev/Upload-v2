@@ -75,7 +75,7 @@ def register(app: Client) -> None:
         await sent.edit_text(
             T.ping_text(elapsed, counts),
             parse_mode=ParseMode.HTML,
-            reply_markup=T.main_menu_keyboard(is_owner_user=is_owner(message.from_user.id)),
+            reply_markup=T.ping_keyboard(),
         )
 
     @app.on_message(filters.command("status") & AUTHORIZED)
