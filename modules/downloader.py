@@ -36,6 +36,7 @@ log = logging.getLogger("s3_bot.downloader")
 MI_B = 1024 * 1024          # Pyrogram trabaja con bloques de 1 MiB al pedir rangos
 HTTP_TIMEOUT = (15, 60)
 USER_AGENT = "todus-bot/2.0 (+telegram)"
+TELEGRAM_DOWNLOAD_RETRIES = 3
 
 
 # ----------------------------------------------------------------------
@@ -238,33 +239,49 @@ async def download_telegram_range(
     else:
         chunks = (length + MI_B - 1) // MI_B
 
-    written = 0
-    limit = length if length is not None else None
+    expected = length if length is not None else max(0, file_size - offset)
+    # Pyrogram puede absorber ciertos errores de GetFile y devolver un
+    # generador vacío. Repetimos la parte completa ante fallos temporales.
+    for attempt in range(1, TELEGRAM_DOWNLOAD_RETRIES + 1):
+        written = 0
+        limit = length if length is not None else None
+        try:
+            with open(dest_path, "wb") as fh:
+                async for block in client.get_file(
+                    file_id=file_id,
+                    file_size=file_size,
+                    limit=chunks,
+                    offset=start_chunk,
+                ):
+                    if task.is_cancelled:
+                        raise TaskCancelled("cancelada por el usuario")
+                    if limit is not None:
+                        remaining = limit - written
+                        if remaining <= 0:
+                            break
+                        block = block[:remaining]
+                    fh.write(block)
+                    written += len(block)
+                    if progress:
+                        progress(written)
 
-    with open(dest_path, "wb") as fh:
-        async for block in client.get_file(
-            file_id=file_id,
-            file_size=file_size,
-            limit=chunks,
-            offset=start_chunk,
-        ):
-            if task.is_cancelled:
-                raise TaskCancelled("cancelada por el usuario")
-            if limit is not None:
-                remaining = limit - written
-                if remaining <= 0:
-                    break
-                block = block[:remaining]
-            fh.write(block)
-            written += len(block)
-            if progress:
-                progress(written)
+            if not expected or written >= expected:
+                return written
+        except TaskCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "descarga Telegram falló en intento %d/%d (offset=%d): %s",
+                attempt, TELEGRAM_DOWNLOAD_RETRIES, offset, exc,
+            )
 
-    if length is not None and written < length:
-        raise RuntimeError(
-            f"descarga incompleta de Telegram: {written} de {length} bytes"
-        )
-    return written
+        if attempt < TELEGRAM_DOWNLOAD_RETRIES:
+            await asyncio.sleep(min(2 * attempt, 5))
+
+    raise RuntimeError(
+        f"descarga incompleta de Telegram: {written} de {expected or length} bytes "
+        f"tras {TELEGRAM_DOWNLOAD_RETRIES} intentos"
+    )
 
 
 async def download_telegram_full(
@@ -276,20 +293,17 @@ async def download_telegram_full(
     progress: Optional[Callable[[int], None]] = None,
 ) -> int:
     """Descarga completa por bloques de 1 MiB desde el evento asíncrono."""
-    from pyrogram.file_id import FileId
-
-    file_id = FileId.decode(media.file_id)
     file_size = int(getattr(media, "file_size", 0) or 0)
-    written = 0
-    with open(dest_path, "wb") as fh:
-        async for block in client.get_file(file_id=file_id, file_size=file_size):
-            if task.is_cancelled:
-                raise TaskCancelled("cancelada por el usuario")
-            fh.write(block)
-            written += len(block)
-            if progress:
-                progress(written)
-    return written
+    return await download_telegram_range(
+        client,
+        media,
+        dest_path,
+        task,
+        offset=0,
+        length=file_size or None,
+        file_size=file_size,
+        progress=progress,
+    )
 
 
 # ----------------------------------------------------------------------

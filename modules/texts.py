@@ -262,14 +262,16 @@ def failed_text(task: "UploadTask") -> str:
     lines = [
         "<b>❌ La tarea falló</b>",
         "",
-        f"📄 {code(shorten(task.filename, 52))}",
-        f"🔁 Intento {task.attempts}/{task.max_attempts_total()}",
+        f"<b>📄 Archivo:</b> {b(shorten(task.filename, 52))}",
+        f"<b>🔁 Intento:</b> {b(f'{task.attempts}/{task.max_attempts_total()}')}",
     ]
     if task.failed_part:
-        lines.append(f"🔢 Parte: {code(task.failed_part)}")
+        lines.append(f"<b>🔢 Parte:</b> {b(task.failed_part)}")
     if task.parts_done:
-        lines.append(f"🧩 Partes subidas antes del fallo: {task.parts_done}/{task.parts_total}")
-    lines += ["", f"<b>Detalle:</b> {code(shorten(task.error or 'sin detalle', 220))}"]
+        lines.append(
+            f"<b>🧩 Progreso:</b> {b(f'{task.parts_done}/{task.parts_total} partes subidas')}"
+        )
+    lines += ["", f"<b>⚠️ Detalle:</b> {i(shorten(task.error or 'sin detalle', 220))}"]
     if task.attempts < task.max_attempts_total():
         lines += ["", i("Puedes reintentar con el botón de abajo.")]
     return cut("\n".join(lines))
