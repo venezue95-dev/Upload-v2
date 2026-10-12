@@ -33,6 +33,7 @@ MEDIA_FILTER = (
     | filters.audio
     | filters.voice
     | filters.video_note
+    | filters.photo          # fotos comprimidas: se sube la resolución mayor
 )
 
 # Agrupación de álbumes: media_group_id -> lista de mensajes + tarea de volcado.
@@ -43,6 +44,9 @@ GROUP_WAIT = 1.5  # segundos de espera para juntar los archivos del álbum
 
 
 def _media_of(message: Message):
+    if message.photo:
+        # Las fotos llegan como varias resoluciones: se usa la más grande.
+        return max(message.photo.sizes, key=lambda size: getattr(size, "file_size", 0) or 0)
     return (
         message.document
         or message.video
@@ -57,6 +61,8 @@ def _filename_of(message: Message) -> str:
     name = getattr(media, "file_name", None)
     if name:
         return name
+    if message.photo:
+        return f"foto_{message.id}.jpg"
     if message.voice:
         return f"nota_de_voz_{message.id}.ogg"
     if message.video_note:
@@ -103,12 +109,12 @@ def register(app: Client) -> None:
 
 async def _handle_one(client: Client, message: Message) -> None:
     user_id = message.from_user.id
-    if not await check_limits(user_id, message):
-        return
-
     media = _media_of(message)
     size = int(getattr(media, "file_size", 0) or 0)
     name = _filename_of(message)
+
+    if not await check_limits(user_id, message, size):
+        return
 
     if size and size > RUNTIME_SETTINGS.max_file_bytes:
         await reply(
@@ -138,7 +144,10 @@ async def _enqueue_batch(client: Client, messages: List[Message]) -> None:
     """Encola todos los archivos de un álbum con un solo mensaje-resumen."""
     first = messages[0]
     user_id = first.from_user.id
-    if not await check_limits(user_id, first):
+    total = sum(
+        int(getattr(_media_of(m), "file_size", 0) or 0) for m in messages
+    )
+    if not await check_limits(user_id, first, total):
         return
 
     accepted: List[str] = []

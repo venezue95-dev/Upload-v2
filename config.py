@@ -16,6 +16,7 @@ S3_CHUNK_SIZE_MB, ...) y se añaden nuevas para la cola escalable:
     S3              S3_GLOBAL_WORKERS, S3_TIMEOUT, S3_KEY_PREFIX,
                     S3_BASE_URL, S3_RETRY_BASE_DELAY, S3_RETRY_MAX_DELAY
     Telegram        TELEGRAM_WORKERS, TG_CONCURRENT_DOWNLOADS
+    Registro        LOG_CHANNEL_ID
     Descargas       STREAM_MODE, MIN_FREE_GB, ALLOW_PRIVATE_URLS
     UI              PROGRESS_INTERVAL_SEC, LOG_LEVEL
 """
@@ -192,6 +193,7 @@ class AppConfig:
     stream_mode: str = "auto"          # auto | on | off
     min_free_gb: float = 2.0           # espacio libre mínimo en disco
     allow_private_urls: bool = False   # permitir URLs a IP privadas
+    log_channel_id: Optional[int] = None   # canal donde registrar las subidas
     log_level: str = "INFO"
 
     def validate(self) -> None:
@@ -268,6 +270,7 @@ def load_config() -> AppConfig:
         stream_mode=_get_str("STREAM_MODE", "auto").lower(),
         min_free_gb=_get_float("MIN_FREE_GB", 2.0),
         allow_private_urls=_get_bool("ALLOW_PRIVATE_URLS", False),
+        log_channel_id=_get_int("LOG_CHANNEL_ID", 0) or None,
         log_level=_get_str("LOG_LEVEL", "INFO").upper(),
     )
 

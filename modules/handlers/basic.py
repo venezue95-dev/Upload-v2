@@ -18,7 +18,7 @@ from config import CONFIG
 from .. import texts as T
 from ..queue import QUEUE
 from ..runtime_settings import RUNTIME_SETTINGS
-from .common import AUTHORIZED, is_owner, reply
+from .common import AUTHORIZED, BANNED, is_owner, reply
 
 log = logging.getLogger("s3_bot.basic")
 
@@ -57,6 +57,15 @@ def register(app: Client) -> None:
     async def _help(client: Client, message: Message):
         await reply(message, T.help_text(1), keyboard=T.help_keyboard(1))
 
+    @app.on_message(BANNED)
+    async def _banned(client: Client, message: Message):
+        """Aviso a usuarios bloqueados (una vez por mensaje, sin más trámite)."""
+        await reply(
+            message,
+            "⛔️ <b>Tu cuenta está bloqueada en este bot</b>\n\n"
+            "Si crees que es un error, contacta con el administrador.",
+        )
+
     @app.on_message(filters.command("ping") & AUTHORIZED)
     async def _ping(client: Client, message: Message):
         start = time.perf_counter()
@@ -86,6 +95,8 @@ def register(app: Client) -> None:
         storage_line = f"{'✅' if ok else '❌'} {T.esc(T.shorten(detail, 90))}"
 
         counts = QUEUE.counts()
+        from ..speedstats import SPEEDS
+
         await note.edit_text(
             T.status_text(
                 bot_line=bot_line,
@@ -93,6 +104,7 @@ def register(app: Client) -> None:
                 settings=RUNTIME_SETTINGS,
                 counts=counts,
                 paused=QUEUE.paused,
+                speeds_line=SPEEDS.summary(),
             ),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,

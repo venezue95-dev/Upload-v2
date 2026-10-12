@@ -16,6 +16,7 @@ from pyrogram.enums import ParseMode
 from pyrogram.types import InlineKeyboardMarkup, Message
 
 from config import CONFIG
+from .. import storage
 from .. import texts as T
 from ..queue import QUEUE, UploadTask
 from ..runtime_settings import RUNTIME_SETTINGS
@@ -44,9 +45,18 @@ def can_manage(user_id: int) -> bool:
 def _authorized_filter():
     async def _flt(_, __, message: Message) -> bool:
         user = getattr(message, "from_user", None)
-        return bool(user and is_authorized(user.id))
+        # Los usuarios baneados no pasan ningún filtro (ni comandos ni envíos).
+        return bool(user and is_authorized(user.id) and not storage.is_banned(user.id))
 
     return filters.create(_flt, "AuthorizedFilter")
+
+
+def _banned_filter():
+    async def _flt(_, __, message: Message) -> bool:
+        user = getattr(message, "from_user", None)
+        return bool(user and storage.is_banned(user.id))
+
+    return filters.create(_flt, "BannedFilter")
 
 
 def _owner_filter():
@@ -59,6 +69,7 @@ def _owner_filter():
 
 AUTHORIZED = _authorized_filter()
 OWNER = _owner_filter()
+BANNED = _banned_filter()
 
 
 def username_of(user) -> str:
@@ -102,8 +113,46 @@ async def edit(message: Message, text: str, keyboard: Optional[InlineKeyboardMar
 # ----------------------------------------------------------------------
 # Encolado de tareas.
 # ----------------------------------------------------------------------
-async def check_limits(user_id: int, message: Message) -> bool:
-    """Anti-spam y cupos básicos antes de crear tareas. True = continuar."""
+async def check_limits(user_id: int, message: Message,
+                       incoming_bytes: int = 0) -> bool:
+    """
+    Puertas de entrada antes de crear una tarea: mantenimiento, baneo,
+    cuota diaria, anti-spam y cupos de cola. True = puede continuar.
+    """
+    if RUNTIME_SETTINGS.get("maintenance", False) and not can_manage(user_id):
+        await reply(
+            message,
+            "🛠 <b>Mantenimiento en curso</b>\n\n"
+            "El bot está bloqueando envíos nuevos unos minutos.\n"
+            f"{T.i('Vuelve a intentarlo más tarde 🙏')}",
+        )
+        return False
+
+    if storage.is_banned(user_id):
+        await reply(
+            message,
+            "⛔️ <b>Tu cuenta está bloqueada</b>\n\n"
+            "Contacta con el administrador del bot si crees que es un error.",
+        )
+        return False
+
+    quota_mb = int(RUNTIME_SETTINGS.get("daily_quota_mb", 0) or 0)
+    if quota_mb > 0 and incoming_bytes > 0:
+        used = storage.bytes_today(user_id)
+        limit = quota_mb * 1024 * 1024
+        if used + incoming_bytes > limit:
+            from ..progress import human_size
+
+            await reply(
+                message,
+                "📊 <b>Cuota diaria superada</b>\n\n"
+                f"• Usado hoy: {T.b(human_size(used))}\n"
+                f"• Límite diario: {T.b(human_size(limit))}\n"
+                f"• Este archivo: {T.b(human_size(incoming_bytes))}\n\n"
+                f"{T.i('La cuota se reinicia cada 24 horas.')}",
+            )
+            return False
+
     remaining = QUEUE.check_rate_limit(user_id)
     if remaining is not None:
         await reply(

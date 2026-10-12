@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 
 # Aseguramos un event loop antes de importar pyrogram (comportamiento clásico).
@@ -37,6 +38,7 @@ from modules.handlers import admin, basic, callbacks, cola, settings, upload, ur
 from modules import texts as T
 from modules.pipeline import cleanup_downloads_root, run_task
 from modules.queue import QUEUE
+from modules.speedstats import SPEEDS
 from modules.runtime_settings import RUNTIME_SETTINGS
 from modules.s3_client import shutdown_pool
 
@@ -149,6 +151,10 @@ async def shutdown(app: Client) -> None:
         await app.stop()
     except Exception:  # noqa: BLE001
         pass
+    try:
+        SPEEDS.save(force=True)
+    except Exception:  # noqa: BLE001
+        pass
     shutdown_pool()
     log.info(
         "Apagado completo | %d tarea(s) pendientes guardadas para reanudar",
@@ -172,6 +178,15 @@ def main() -> int:
         storage.init(CONFIG)
     except Exception as exc:  # noqa: BLE001
         log.warning("Historial no disponible (%s): sigo sin estadísticas", exc)
+
+    # Velocidades aprendidas (barra de progreso y ETA realistas desde el
+    # primer segundo, incluso antes de medir nada en esta sesión).
+    SPEEDS.configure(os.path.join(CONFIG.data_dir, "speed_stats.json"))
+    try:
+        avg_upload, avg_download = storage.avg_speeds()
+        SPEEDS.seed_from_history(avg_upload, avg_download)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("No se pudo sembrar velocidades: %s", exc)
     cleanup_downloads_root()
 
     # Comprobamos la librería todus al arrancar (falla rápido y claro).

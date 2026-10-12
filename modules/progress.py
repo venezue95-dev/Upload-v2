@@ -8,7 +8,7 @@ desde cualquier módulo.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 # Ancho por defecto de las barras.
 BAR_WIDTH = 18
@@ -143,4 +143,67 @@ class SpeedMeter:
         self._last_t = None
         self._last_bytes = 0
         self.speed = 0.0
+        self._samples = 0
+
+
+# ----------------------------------------------------------------------
+# Velocímetro por eventos (para la SUBIDA).
+# ----------------------------------------------------------------------
+class RateMeter:
+    """
+    Media exponencial de velocidad alimentada por *eventos completos*
+    (una parte subida = bytes / duración real).
+
+    Se usa para la subida porque el PUT de cada parte no informa de bytes
+    intermedios: medir con "bytes confirmados / 0,5 s" daba picos falsos y
+    barras congeladas.
+
+    `prior_fn` devuelve la estimación global aprendida (speedstats); se usa
+    mientras la tarea no tenga ninguna medición propia, de modo que la barra
+    y la ETA funcionan desde el primer segundo.
+    """
+
+    __slots__ = ("_value", "_prior_fn", "_alpha", "_samples")
+
+    def __init__(self, prior_fn: Optional[Callable[[], float]] = None,
+                 alpha: float = 0.3) -> None:
+        self._value: float = 0.0
+        self._prior_fn = prior_fn
+        self._alpha = alpha
+        self._samples = 0
+
+    def note(self, nbytes: int, seconds: float) -> float:
+        """Registra una medición real (bytes subidos en `seconds`)."""
+        if nbytes <= 0 or seconds <= 0.2:
+            return self.value()
+        rate = nbytes / seconds
+        if self._value <= 0:
+            self._value = rate
+        else:
+            self._value = (1 - self._alpha) * self._value + self._alpha * rate
+        self._samples += 1
+        return self._value
+
+    def value(self) -> float:
+        """Velocidad medida; si aún no hay muestras, la estimación global."""
+        if self._value > 0:
+            return self._value
+        if self._prior_fn is not None:
+            try:
+                return float(self._prior_fn())
+            except Exception:  # pragma: no cover
+                return 0.0
+        return 0.0
+
+    @property
+    def measured(self) -> bool:
+        """True si hay al menos una medición real de esta tarea."""
+        return self._value > 0
+
+    @property
+    def samples(self) -> int:
+        return self._samples
+
+    def reset(self) -> None:
+        self._value = 0.0
         self._samples = 0

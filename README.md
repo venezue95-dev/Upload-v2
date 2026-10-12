@@ -80,6 +80,34 @@ Usuario Z ─┘   │ usuario      │   │ + prioridad   │   │ sube trozo
 
 ---
 
+## 📈 Cómo se calcula el progreso (v1.3)
+
+Antes el progreso se medía con "bytes confirmados ÷ tiempo". Eso **no funciona
+con toDus**, porque el `PUT` de una parte no informa de bytes intermedios: el
+bot solo se enteraba del avance **cuando terminaba la parte completa**. Resultado
+real, medido en las pruebas: con un archivo de una sola parte la barra se quedaba
+en **0 % durante toda la subida** (salto final a 100 %) y con varias partes daba
+**escalones del tamaño de cada parte** con velocidad de 0 B/s casi todo el rato.
+
+Ahora se calcula así:
+
+1. **Velocidad aprendida y persistida** (`data/speed_stats.json`): cada parte
+   terminada enseña al bot cuánto tarda toDus de verdad. Se guarda entre
+   reinicios y se siembra con el historial (`/status` la muestra).
+2. **Crédito en vuelo**: las partes que están subiéndose cuentan su avance
+   estimado con esa velocidad (hasta el 90 %; el 10 % final solo al confirmar).
+3. **Progreso monótono**: nunca retrocede, aunque una parte falle o se reintente.
+4. **Velocidad honesta**: mientras no haya medición propia se muestra con `~`
+   y la etiqueta *📈 velocidad estimada*.
+5. **ETA correcta**: cuenta las partes en paralelo (`ceil(partes/workers)`)
+   y el tramo final de las que ya están en vuelo, en vez de `restante ÷ velocidad`.
+
+Efecto medido en `tests/test_progress.py`: la barra arranca al primer refresco
+(0,7 % a los 0,3 s) y avanza de forma continua hasta el 100 %, sin congelarse
+ni pegar saltos.
+
+---
+
 ## 🧭 Comandos
 
 | Comando | Quién | Qué hace |
@@ -91,15 +119,20 @@ Usuario Z ─┘   │ usuario      │   │ + prioridad   │   │ sube trozo
 | `/cancelar` | todos | Cancela todas tus tareas (con confirmación) |
 | `/reintentar [id]` | todos | Reintenta una tarea fallida/cancelada |
 | `/enlaces [id]` | todos | Reenvía la lista de enlaces como `.txt` |
+| `/buscar <texto>` | todos | Busca en tu historial por nombre de archivo |
 | `/status` | todos | Estado del bot, del almacenamiento y de la cola |
 | `/ping` | todos | Latencia + resumen de la cola |
-| `/settings` | **owner** | 12 ajustes en caliente, en 3 páginas |
+| `/settings` | **owner** | 15 ajustes en caliente, en 3 páginas |
 | `/stats` | **owner** | Estadísticas globales + top usuarios |
 | `/usuarios` | **owner** | Lista de usuarios y su consumo |
 | `/anuncio <texto>` | **owner** | Aviso a todos los usuarios conocidos |
 | `/pausar` · `/reanudar` | **owner** | Pausa/reactiva la cola (deja terminar lo activo) |
 | `/sistema` | **owner** | Disco, memoria, CPU, temporales, uptime |
 | `/limpiar` | **owner** | Cancela la cola, borra temporales y purga historial >90 días |
+| `/ban <id│@user> [motivo]` | **owner** | Bloquea a un usuario (no puede enviar nada) |
+| `/unban <id│@user>` | **owner** | Levanta el bloqueo |
+| `/baneados` | **owner** | Lista de usuarios bloqueados con motivo y fecha |
+| `/mantenimiento` | **owner** | Activa/desactiva el modo mantenimiento (mira abajo) |
 
 **Botones dentro de cada tarea**: cancelar · detalle · reintentar · enlaces `.txt`
 · borrar de toDus · quitar de la lista (owner).
@@ -242,18 +275,32 @@ python -u bot.py
 
 ## 🧪 Pruebas
 
-Dos suites que **no necesitan Telegram ni toDus** (usan un stub de la librería y
-un servidor HTTP local) y que sirven para verificar cualquier cambio:
+Cuatro suites que **no necesitan Telegram ni toDus** (usan un stub de la librería
+y una base de datos temporal) y que sirven para verificar cualquier cambio:
 
 ```bash
-python tests/test_queue.py       # 30 pruebas: cupos, justicia, cancelación, ETA, persistencia
+python tests/test_queue.py       # 34 pruebas: cupos, justicia, cancelación, ETA, persistencia
 python tests/test_pipeline.py    # 71 pruebas: pipeline real, reintentos, modos, textos, vistas
+python tests/test_progress.py    # 33 pruebas: cálculo de progreso, velocidad y ETA (v1.3)
+python tests/test_extras.py      # 87 pruebas: funciones nuevas de la v1.3 (v1.3)
 ```
 
 Cubren, entre otras cosas: que nunca se superen los límites de concurrencia, que
 un usuario con 10 archivos no bloquee a otro con 1, que la cancelación funcione a
 mitad de subida, que los temporales se limpien siempre, que los mensajes no pasen
-del límite de Telegram y que el HTML se escape correctamente.
+del límite de Telegram, que el HTML se escape correctamente, y (lo nuevo) que el
+**progreso avance de forma continua y monótona** con velocidades conocidas.
+
+---
+
+### Suites disponibles
+
+| Suite | Qué comprueba |
+|---|---|
+| `tests/test_queue.py` | cola, cupos, prioridad, posiciones y ETA (34 pruebas) |
+| `tests/test_pipeline.py` | descarga, partes, subida, reintentos y reanudación (71 pruebas) |
+| `tests/test_progress.py` | **cálculo de progreso y velocidad** con velocidades conocidas (33) |
+| `tests/test_extras.py` | velocidades aprendidas, baneos, cuota, ajustes, avisos (87) |
 
 ---
 
@@ -285,9 +332,21 @@ Página 3 · **Avanzado**
 | 🐢 Espera entre envíos | 0 / 3 / 10 / 30 s | anti-spam por usuario |
 | 🌊 Modo de trabajo | auto / stream / classic | `auto` = streaming si se puede |
 | ⏱️ Refresco del progreso | 2 / 3 / 5 / 10 s | más bajo = mensajes más vivos |
+| 🔍 Verificar subidas (HEAD) | sí / no | comprueba el tamaño en toDus al terminar cada parte |
+| 📊 Cuota diaria por usuario | 0 / 1 / 2 / 5 / 10 GB | `0` = sin límite; se cuenta lo enviado hoy |
+| 🛠 Mantenimiento | no / sí | bloquea envíos nuevos sin cortar los que están en curso |
 
 Todo se guarda en `data/settings.json` y se aplica **al instante** a las tareas
 nuevas (el botón ♻️ vuelve a los valores del `.env`).
+
+---
+
+## 📣 Registro de subidas en un canal
+
+Si defines `LOG_CHANNEL_ID` (por ejemplo `-1001234567890`), cada subida
+completada se copia a ese canal con usuario, archivo, tamaño, partes, tiempo y
+velocidad media. Es opcional: sin la variable el bot no envía nada. El bot debe
+ser **administrador** del canal.
 
 ---
 

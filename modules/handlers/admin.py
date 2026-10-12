@@ -10,6 +10,9 @@ Comandos de administración (solo owner):
 - /reanudar   → reactiva la cola.
 - /sistema    → disco, memoria, CPU, temporales.
 - /limpiar    → cancela la cola, limpia temporales y purga historial antiguo.
+- /ban y /unban → bloquea o desbloquea a un usuario.
+- /baneados   → lista de usuarios bloqueados.
+- /mantenimiento → bloquea/permite envíos nuevos (con la cola funcionando).
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ import os
 import platform
 import shutil
 import time
+from typing import Optional
 
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
@@ -28,6 +32,7 @@ from pyrogram.types import Message
 from config import CONFIG
 from .. import storage, texts as T
 from ..queue import QUEUE
+from ..runtime_settings import RUNTIME_SETTINGS
 from .common import OWNER, reply
 
 log = logging.getLogger("s3_bot.admin")
@@ -119,6 +124,69 @@ def register(app: Client) -> None:
         info = await asyncio.to_thread(_system_info)
         await reply(message, T.system_text(info))
 
+    @app.on_message(filters.command(["ban", "bloquear"]) & OWNER)
+    async def _ban(client: Client, message: Message):
+        parts = (message.text or "").split()
+        target = _parse_user(parts[1]) if len(parts) > 1 else None
+        if target is None:
+            await reply(
+                message,
+                "Uso: " + T.code("/ban <id> [motivo]") + "\n"
+                + T.i("El id lo puedes ver en /usuarios. Los baneados no pueden "
+                      "usar el bot ni ver sus comandos."),
+            )
+            return
+        reason = " ".join(parts[2:])[:200]
+        storage.ban_user(target, reason)
+        # Sus tareas en curso se cancelan para no gastar recursos.
+        cancelled = QUEUE.cancel_user(target)
+        await reply(
+            message,
+            f"⛔️ <b>Usuario bloqueado</b>\n\n"
+            f"• ID: {T.code(target)}\n"
+            f"• Motivo: {T.esc(reason or '—')}\n"
+            f"• Tareas canceladas: {T.code(cancelled)}",
+        )
+
+    @app.on_message(filters.command(["unban", "desbloquear"]) & OWNER)
+    async def _unban(client: Client, message: Message):
+        parts = (message.text or "").split()
+        target = _parse_user(parts[1]) if len(parts) > 1 else None
+        if target is None:
+            await reply(message, "Uso: " + T.code("/unban <id>"))
+            return
+        removed = storage.unban_user(target)
+        await reply(
+            message,
+            f"✅ Usuario {T.code(target)} {'desbloqueado' if removed else 'no estaba bloqueado'}.",
+        )
+
+    @app.on_message(filters.command(["baneados", "bans"]) & OWNER)
+    async def _baneados(client: Client, message: Message):
+        rows = storage.banned_users()
+        if not rows:
+            await reply(message, "✅ No hay usuarios bloqueados.")
+            return
+        lines = [f"<b>⛔️ Usuarios bloqueados ({len(rows)})</b>", ""]
+        for row in rows[:50]:
+            lines.append(
+                f"• {T.code(row['user_id'])} — {T.esc(T.shorten(row.get('reason') or 'sin motivo', 40))}"
+            )
+        await reply(message, "\n".join(lines))
+
+    @app.on_message(filters.command("mantenimiento") & OWNER)
+    async def _mantenimiento(client: Client, message: Message):
+        current = bool(RUNTIME_SETTINGS.get("maintenance", False))
+        RUNTIME_SETTINGS.set_value("maintenance", not current)
+        now = not current
+        await reply(
+            message,
+            ("🛠 <b>Modo mantenimiento ACTIVADO</b>\n\n"
+             "Las tareas en curso siguen; los envíos nuevos se rechazan con un aviso.")
+            if now else
+            ("✅ <b>Modo mantenimiento desactivado</b>\n\nEl bot vuelve a aceptar envíos."),
+        )
+
     @app.on_message(filters.command("limpiar") & OWNER)
     async def _limpiar(client: Client, message: Message):
         cancelled = QUEUE.cancel_all()
@@ -140,6 +208,16 @@ def register(app: Client) -> None:
             f"• Registros de historial antiguos: {T.code(purged)}\n\n"
             + T.i("El historial reciente y las estadísticas se conservan."),
         )
+
+
+def _parse_user(raw: str) -> Optional[int]:
+    """Acepta '123456', '@usuario' o un enlace t.me; devuelve el id o None."""
+    raw = (raw or "").strip().rstrip(",.")
+    if not raw:
+        return None
+    if raw.lstrip("-").isdigit():
+        return int(raw)
+    return None
 
 
 def _system_info() -> dict:

@@ -38,6 +38,10 @@ CYCLE_OPTIONS: Dict[str, List[Any]] = {
     "rate_limit_sec": [0, 3, 10, 30],
     "pipeline_mode": ["auto", "stream", "classic"],
     "progress_interval": [2.0, 3.0, 5.0, 10.0],
+    # Nuevas
+    "verify_upload": [True, False],
+    "daily_quota_mb": [0, 1024, 2048, 5120, 10240],
+    "maintenance": [False, True],
 }
 
 CYCLE_LABELS: Dict[str, str] = {
@@ -53,6 +57,9 @@ CYCLE_LABELS: Dict[str, str] = {
     "rate_limit_sec": "🐢 Espera entre envíos (seg)",
     "pipeline_mode": "🌊 Modo de trabajo",
     "progress_interval": "⏱️ Refresco del progreso (seg)",
+    "verify_upload": "🔍 Verificar subidas (HEAD)",
+    "daily_quota_mb": "📊 Cuota diaria por usuario",
+    "maintenance": "🛠 Mantenimiento (bloquear envíos)",
 }
 
 CYCLE_UNITS: Dict[str, str] = {
@@ -60,6 +67,7 @@ CYCLE_UNITS: Dict[str, str] = {
     "chunk_size_mb": "MB",
     "rate_limit_sec": "s",
     "progress_interval": "s",
+    "daily_quota_mb": "MB/día",
 }
 
 # Los 11 ajustes agrupados en 2 páginas (así caben en el teclado inline).
@@ -77,10 +85,13 @@ SETTINGS_PAGES: List[List[str]] = [
         "max_retries",
         "max_file_mb",
     ],
-    [  # 3 · Avanzado
+    [  # 3 · Avanzado, integridad y control
         "rate_limit_sec",
         "pipeline_mode",
         "progress_interval",
+        "verify_upload",
+        "daily_quota_mb",
+        "maintenance",
     ],
 ]
 
@@ -97,6 +108,9 @@ DEFAULTS: Dict[str, Any] = {
     "rate_limit_sec": CONFIG.queue.rate_limit_sec,
     "pipeline_mode": CONFIG.stream_mode if CONFIG.stream_mode in ("auto", "stream") else "auto",
     "progress_interval": CONFIG.progress_interval,
+    "verify_upload": True,
+    "daily_quota_mb": 0,
+    "maintenance": False,
 }
 
 

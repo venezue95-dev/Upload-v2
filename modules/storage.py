@@ -19,7 +19,7 @@ import os
 import sqlite3
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger("s3_bot.storage")
 
@@ -41,10 +41,17 @@ CREATE TABLE IF NOT EXISTS tasks (
     error        TEXT,
     created_at   REAL,
     finished_at  REAL,
-    duration     REAL
+    duration     REAL,
+    base         TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, finished_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+
+CREATE TABLE IF NOT EXISTS bans (
+    user_id   INTEGER PRIMARY KEY,
+    reason    TEXT,
+    banned_at REAL
+);
 
 CREATE TABLE IF NOT EXISTS users (
     user_id     INTEGER PRIMARY KEY,
@@ -73,6 +80,11 @@ def init(cfg=None) -> None:
         conn = sqlite3.connect(path, check_same_thread=False, timeout=15)
         conn.row_factory = sqlite3.Row
         conn.executescript(SCHEMA)
+        # Migración suave para bases de datos creadas antes de la v1.3.
+        try:
+            conn.execute("ALTER TABLE tasks ADD COLUMN base TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.commit()
@@ -99,12 +111,13 @@ def record_task(task, cfg=None) -> None:
                 """
                 INSERT INTO tasks (task_id, user_id, username, filename, file_size,
                                    source, status, parts, keys, urls, error,
-                                   created_at, finished_at, duration)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                   created_at, finished_at, duration, base)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     status=excluded.status, parts=excluded.parts, keys=excluded.keys,
                     urls=excluded.urls, error=excluded.error,
-                    finished_at=excluded.finished_at, duration=excluded.duration
+                    finished_at=excluded.finished_at, duration=excluded.duration,
+                    base=excluded.base
                 """,
                 (
                     task.task_id,
@@ -121,6 +134,7 @@ def record_task(task, cfg=None) -> None:
                     float(task.created_at or time.time()),
                     float(task.finished_at or time.time()),
                     float(task.duration()),
+                    task.s3_base or "",
                 ),
             )
             size = int(task.bytes_transferred or task.file_size or 0)
@@ -290,6 +304,107 @@ def purge_older_than(days: int = 90) -> int:
         return cur.rowcount or 0
     except Exception:  # pragma: no cover
         return 0
+
+
+# ----------------------------------------------------------------------
+# Velocidades medias (siembran el estimador de progreso).
+# ----------------------------------------------------------------------
+def avg_speeds() -> Tuple[float, float]:
+    """(bytes/s de subida, bytes/s de bajada) a partir del historial real."""
+    try:
+        conn = _conn()
+        with _LOCK:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(file_size),0) AS total_bytes,
+                       COALESCE(SUM(CASE WHEN duration > 0 THEN duration ELSE 0 END),0)
+                           AS total_time
+                FROM tasks WHERE status='completed'
+                """
+            ).fetchone()
+        total_bytes = float(row["total_bytes"] or 0)
+        total_time = float(row["total_time"] or 0)
+        upload = (total_bytes / total_time) if total_time > 0 else 0.0
+        return upload, 0.0
+    except Exception:  # pragma: no cover
+        return 0.0, 0.0
+
+
+# ----------------------------------------------------------------------
+# Cuota diaria por usuario.
+# ----------------------------------------------------------------------
+def bytes_today(user_id: int) -> int:
+    """Bytes subidos por el usuario en las últimas 24 h (para la cuota)."""
+    try:
+        conn = _conn()
+        cutoff = time.time() - 86400
+        with _LOCK:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(file_size),0) AS total FROM tasks
+                WHERE user_id=? AND status='completed' AND finished_at>=?
+                """,
+                (user_id, cutoff),
+            ).fetchone()
+        return int(row["total"] or 0)
+    except Exception:  # pragma: no cover
+        return 0
+
+
+# ----------------------------------------------------------------------
+# Baneos.
+# ----------------------------------------------------------------------
+def ban_user(user_id: int, reason: str = "") -> None:
+    conn = _conn()
+    with _LOCK:
+        conn.execute(
+            "INSERT INTO bans (user_id, reason, banned_at) VALUES (?,?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason, "
+            "banned_at=excluded.banned_at",
+            (user_id, reason[:200], time.time()),
+        )
+        conn.commit()
+
+
+def unban_user(user_id: int) -> bool:
+    conn = _conn()
+    with _LOCK:
+        cur = conn.execute("DELETE FROM bans WHERE user_id=?", (user_id,))
+        conn.commit()
+    return bool(cur.rowcount)
+
+
+def is_banned(user_id: int) -> bool:
+    try:
+        conn = _conn()
+        with _LOCK:
+            row = conn.execute("SELECT 1 FROM bans WHERE user_id=?", (user_id,)).fetchone()
+        return row is not None
+    except Exception:  # pragma: no cover
+        return False
+
+
+def banned_users() -> List[Dict[str, Any]]:
+    conn = _conn()
+    with _LOCK:
+        rows = conn.execute("SELECT * FROM bans ORDER BY banned_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+# ----------------------------------------------------------------------
+# Búsqueda en el historial.
+# ----------------------------------------------------------------------
+def search_user_history(user_id: int, query: str, limit: int = 25) -> List[Dict[str, Any]]:
+    conn = _conn()
+    with _LOCK:
+        rows = conn.execute(
+            """
+            SELECT * FROM tasks WHERE user_id=? AND filename LIKE ?
+            ORDER BY finished_at DESC LIMIT ?
+            """,
+            (user_id, f"%{query}%", limit),
+        ).fetchall()
+    return [_row(r) for r in rows]
 
 
 def _row(row: sqlite3.Row) -> Dict[str, Any]:

@@ -202,3 +202,155 @@ cambia en caliente con `/settings`, sin reiniciar.
 **Si quieres que vaya más rápido**: sube `S3_GLOBAL_WORKERS` a 8-12 y
 `QUEUE_MAX_CONCURRENT` a 6, y pon `TgCrypto` (ya está en requirements) para
 acelerar Telegram. Vigila el disco y el `FLOOD_WAIT` de Telegram.
+
+
+---
+
+## 5. 🔎 Auditoría v1.3 de tu repo `Upload-v2`
+
+Revisé **todo** el proyecto sobre tu copia (commits hasta `264c461`): cola,
+pipeline, progreso, notificador, S3, storage, handlers, ajustes, Docker,
+`healthcheck.py`, `.env`, `.gitignore`, documentación y seguridad. Esto es lo
+que encontré y lo que hice.
+
+### 5.1 📈 El progreso no calculaba bien: qué pasaba exactamente
+
+Lo reproduje con una prueba de velocidad conocida antes de tocar nada. Los
+números del fallo:
+
+| Escenario | Qué veía el usuario |
+|---|---|
+| Archivo de 30 MB con `chunk=50 MB` (**1 sola parte**) | **0,0 % y 0 B/s durante los 15 s de subida** (30 de 32 refrescos en 0 %), y de golpe 100 % |
+| Archivo de 500 MB (**3 partes en paralelo**) | Escalones **0 % → 30 % → 60 % → 100 %**, con **0 B/s en 165 de 168 refrescos** |
+
+**Por qué pasaba.** La velocidad se calculaba como *"bytes confirmados ÷ tiempo
+transcurrido"* (`sample_speed` + `_meter`). Pero el `PUT` de toDus **no informa
+de bytes intermedios**: el bot solo sabe que una parte avanzó **cuando la parte
+termina**. Entonces:
+
+- Con 1 parte, entre el inicio y el final no hay ni un byte "confirmado" →
+  velocidad 0 y progreso 0 durante toda la subida.
+- El "crédito" de las partes en vuelo (`_inflight_credit`) se calculaba con esa
+  velocidad, que era 0 → crédito 0 → la barra no se movía.
+- El ETA se calculaba con `restante ÷ velocidad` sobre esa velocidad falsa (0)
+  y **sin dividir por las partes en paralelo** → tiempos irreales.
+- Además, el texto del progreso tenía una rama `priming` que dejaba el mensaje
+  en "⏱️ Tiempo transcurrido" **mientras `bytes_transferred` fuera 0**, es decir,
+  durante toda la subida de un archivo de una sola parte: sin barra, sin
+  velocidad y sin ETA.
+
+**Cómo queda ahora** (todo medido en `tests/test_progress.py`, 33 pruebas):
+
+1. `RateMeter`: cada parte terminada aporta **bytes y segundos reales** → la
+   velocidad sale de datos de verdad, no de "cuánto ha confirmado el endpoint".
+2. `SpeedStats` (`data/speed_stats.json`): velocidad **aprendida y persistida**
+   con suavizado EWMA (α 0,3), semilla del historial al arrancar, límites de
+   cordura (32 KB/s – 200 MB/s) para que una medición absurda no envenene nada.
+3. **Crédito en vuelo** con la velocidad real (propia o aprendida), con tope del
+   90 % por parte: el 10 % final solo al confirmar. Eso es lo que hace que la
+   barra se mueva desde el primer refresco.
+4. **Progreso monótono** (`_processed_peak`): nunca retrocede, ni con reintentos.
+5. **Descarga por parte** (`note_fetched` / `_part_fetched`): en streaming la
+   bajada también se ve avanzar, no solo la subida.
+6. **ETA correcta**: cuenta las **oleadas** de partes en paralelo
+   (`ceil(partes/workers)`) y el tramo final de las partes ya en vuelo.
+7. **Velocidad honesta**: mientras no haya una medición propia se muestra `~` y
+   la etiqueta *📈 velocidad estimada*; deja de marcarse en cuanto hay dato real.
+8. La barra y el ETA se muestran **desde el primer refresco** (ya no hay rama
+   que esconda el progreso).
+
+Resultado en la misma prueba: 0,68 % a los 0,3 s, 2,28 % a los 1,0 s, sin saltos
+(ningún salto > 12 % entre refrescos), ETA inicial correcta con 3 partes en
+paralelo y velocidad medida final a menos del 2 % de la real.
+
+### 5.2 🐞 Fallos reales encontrados y arreglados
+
+| # | Fallo | Consecuencia | Arreglo |
+|---|---|---|---|
+| 1 | `sample_speed` medía la subida por bytes confirmados | Barra congelada en 0 % (1 parte) y escalones (varias) | `RateMeter` + crédito en vuelo (§5.1) |
+| 2 | `eta_seconds` ignoraba las partes en paralelo | ETA 3× más larga de lo real | Cuenta por oleadas + partes en vuelo |
+| 3 | Texto en modo `priming` durante toda la subida de 1 parte | Sin barra, velocidad ni ETA | Se eliminó la rama; la barra siempre se pinta |
+| 4 | `bytes_fetched` era un atributo asignado a mano | La bajada en streaming no se veía avanzar | Es una propiedad que suma por partes |
+| 5 | `notifier._sync_disk_progress` importaba mal el nombre seguro | El tapón de seguridad de progreso podía fallar | `from .downloader import safe_local_name` |
+| 6 | `pipeline._upload_sync` medía con `time.time()`/`monotonic()` mezclados | Velocidad por parte imprecisa | Cronómetro `time.monotonic()` por parte |
+| 7 | No se verificaba lo subido | Una parte truncada pasaba por buena | `verify_part` con HEAD (tolerante a endpoints sin HEAD) |
+| 8 | Reintentar una tarea volvía a subir todo | Datos y tiempo perdidos | `resume_folder` + `resumed_parts` (reanudación real) |
+| 9 | `storage.avg_speeds()` con un JOIN innecesario | Consulta frágil | Simplificada |
+| 10 | `pipeline.py` variable sin usar, `texts.metric_speed` duplicada | Ruido de lint | Limpiado (`pyflakes` sin avisos) |
+
+### 5.3 ✨ Funciones nuevas que añadí
+
+| Función | Dónde | Qué hace |
+|---|---|---|
+| Velocidad aprendida persistente | `modules/speedstats.py` (nuevo) | la estimación mejora sola con cada subida y sobrevive a los reinicios |
+| Verificación de integridad | ajuste 🔍 + `s3_client.verify_part` | comprueba con HEAD el tamaño de cada parte subida |
+| Reanudación de partes | `_run_parts(skip=…)` + `_resume_state` | al reintentar sube **solo lo que falta** ("♻️ Reanudando: 3 de 5 partes") |
+| Registro en canal | `LOG_CHANNEL_ID` + `notifier._log_to_channel` | copia cada subida completada a un canal |
+| Baneos | `/ban`, `/unban`, `/baneados` | el baneado recibe aviso una vez y no puede usar nada |
+| Cuota diaria | ajuste 📊 `daily_quota_mb` + `storage.bytes_today` | corta a quien abuse sin tocar el resto |
+| Modo mantenimiento | `/mantenimiento` (ajuste 🛠) | bloquea envíos nuevos sin cortar los que están en curso |
+| Búsqueda en el historial | `/buscar <texto>` | encuentra una subida antigua por nombre |
+| Soporte de **fotos** | `modules/handlers/upload.py` | acepta fotos (toma la resolución mayor) además de archivos/vídeos/URLs |
+| Aviso de fallos al owner | `notifier._alert_owner` | máximo un aviso por minuto, con el motivo |
+| `/status` con velocidades | `modules/handlers/basic.py` | muestra la velocidad aprendida de subida y bajada |
+| `.env.example` | raíz del repo | plantilla completa comentada (ya no hay que adivinar variables) |
+
+`/settings` pasa de 12 a **15 ajustes** en las mismas 3 páginas.
+
+### 5.4 ⚠️ Aviso sobre tu `.env` (lo dejo como está, como pediste)
+
+1. **`DOWNLOAD_DIR=/app/downloads` está fuera del volumen.** En Railway el disco
+   fuera del volumen es diminuto y efímero: con `MIN_FREE_GB=2` empezarás a ver
+   *"❌ Sin espacio en disco"* en archivos grandes. **Cámbialo a
+   `/app/data/downloads`** (el `.env.example` ya lo trae así).
+2. **`API_ID` / `API_HASH` / `BOT_TOKEN` siguen escritos en el `.env`.** No los
+   toqué, pero recuerda: si ese `.env` estuvo alguna vez en GitHub, revoca el
+   token con @BotFather (`/revoke`) y pon el nuevo.
+3. `railtway.toml` / `railway.json`: **no lo commitees** en el repo público
+   (fuerza *builds* en cada push). Usa las variables de entorno del panel.
+
+---
+
+## 6. 🗺 Lo que todavía le falta (por orden de utilidad real)
+
+Esto es lo que **aún no está** y yo añadiría después, con prioridad honesta.
+
+### 🔴 Prioridad alta (se nota todos los días)
+
+1. **Deduplicación por hash SHA-256 + caché de enlaces.** Si alguien reenvía un
+   archivo que ya subió antes, devolver sus enlaces al instante sin volver a
+   subirlo. Ahorra el 100 % del tiempo en los reenvíos típicos de grupos. Es la
+   mejora más rentable que le queda al bot.
+2. **Renovación / comprobación de enlaces.** Comprobar si los enlaces siguen
+   vivos (HEAD) y avisar cuando caduquen, con opción de re-subir desde el
+   histórico (`keys` ya está guardado, así que es viable).
+3. **Exportación del historial** a `.csv` / `.json` desde `/historial` (el owner
+   ya pide el `.txt` de enlaces; el CSV sirve para controlar consumo).
+4. **Prueba de carga real con 40 usuarios** (`tests/test_load.py`): el bot está
+   diseñado para eso, pero conviene un test que simule 40 usuarios × 3 tareas
+   con `todus` falso y compruebe que no hay *flood* ni bloqueos.
+
+### 🟡 Prioridad media
+
+5. **Miniaturas / previsualización**: primer fotograma o imagen embebida al
+   mandar los enlaces (mejora muchísimo cómo se ve en el chat).
+6. **Rate limit por segundo y por usuario** (ahora es "espera entre envíos", no
+   un caudal): útil si alguien encola cientos de archivos pequeños.
+7. **Limpieza automática de temporales huérfanos** al arrancar y cada X horas
+   (hoy se limpia en `/limpiar` y al terminar tareas).
+8. **Alertas al owner más allá de fallos**: cola saturada, disco bajo, endpoint
+   de toDus caído, `FLOOD_WAIT` de Telegram.
+9. **Página de estado web** (`healthcheck.py` ya existe): exponerla con un
+   `healthcheckPath` real para monitorizar desde el navegador.
+10. **Internacionalización (ES/EN)** del texto de los mensajes.
+
+### 🟢 Opcional / cuando haya tiempo
+
+11. **Webhook/HTTP opcional** para integrarlo con otro sistema propio.
+12. **Firma de los mensajes del canal de registro** (avisar también de fallos y
+    cancelaciones, no solo completadas).
+13. **Cifrado del `history.db`** si te preocupa que los nombres de archivo queden
+    en disco en claro.
+
+Dime cuál quieres que haga y lo monto; la deduplicación por hash y la
+comprobación de enlaces son las dos que más valor dan por el trabajo que cuestan.

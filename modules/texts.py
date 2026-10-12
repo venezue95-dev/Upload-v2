@@ -53,15 +53,20 @@ def pre(value) -> str:
 
 
 def display_number(value) -> str:
-    """Muestra 2.0 como 2, conservando decimales significativos."""
+    """Muestra 2.0 como 2, los booleanos como sí/no, etc."""
+    if isinstance(value, bool):
+        return "sí" if value else "no"
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value)
 
 
-def metric_speed(value: float) -> str:
-    """Evita mostrar 0 B/s antes de tener una muestra real de velocidad."""
-    return P.human_speed(value) if value and value > 0 else "calculando…"
+def metric_speed(value: float, estimated: bool = False) -> str:
+    """Velocidad lista para mostrar. '~' = todavía es una estimación."""
+    if not value or value <= 0:
+        return "calculando…"
+    prefix = "~" if estimated else ""
+    return f"{prefix}{P.human_speed(value)}"
 
 
 def _bold_non_link_text(text: str) -> str:
@@ -239,57 +244,64 @@ def help_text(page: int) -> str:
 # Progreso.
 # ----------------------------------------------------------------------
 def progress_text(task: "UploadTask") -> str:
-    total = task.file_size or task.bytes_transferred or 0
-    pct = task.progress_percent()
-    speed = task.speed
-    eta = task.eta_seconds()
+    """
+    Mensaje de progreso (se refresca cada pocos segundos).
 
-    header = f"<b>{esc(task.phase or 'Procesando')}</b>\n<b>{esc(shorten(task.filename, 48))}</b>"
-    download_pct = (100.0 * task.bytes_fetched / total) if total else 0.0
-    upload_pct = (100.0 * task.processed_bytes() / total) if total else 0.0
-    lines = [header]
-    upload_measured = task.bytes_transferred > 0 or task.upload_speed > 0
-    download_measured = task.bytes_fetched > 0 or task.download_speed > 0
-    upload_starting = task.status == TaskStatus.UPLOADING and not upload_measured
-    download_starting = task.status == TaskStatus.DOWNLOADING and not download_measured
-    if upload_starting:
-        lines += [
-            f"<b>📤 Subiendo parte {min(task.parts_done + 1, task.parts_total or 1)}/{task.parts_total or 1}…</b>",
-            f"<b>⏱️ Tiempo transcurrido: {P.human_time_clock(task.duration())}</b>",
-        ]
-    elif download_starting:
-        lines += [
-            "<b>📥 Descarga en curso…</b>",
-            f"<b>⏱️ Tiempo transcurrido: {P.human_time_clock(task.duration())}</b>",
-        ]
-    elif task.mode == "stream":
+    Reglas de honestidad: si la velocidad de subida todavía no se ha medido en
+    esta tarea (el primer PUT no ha terminado), se muestra con "~" porque es
+    una estimación basada en la velocidad aprendida del servidor.
+    """
+    total = task.file_size or 0
+    estimated = task.is_estimated()
+    elapsed = P.human_time_clock(task.duration())
+
+    lines = [
+        f"<b>{esc(task.phase or 'Procesando')}</b>",
+        f"<b>{esc(shorten(task.filename, 48))}</b>",
+    ]
+
+    # `priming` es solo informativo: al empezar no hay nada medido todavía,
+    # pero la barra SÍ se muestra (con la estimación de velocidad aprendida),
+    # que es justo lo que faltaba antes: con un archivo de una sola parte el
+    # mensaje se quedaba en "tiempo transcurrido" sin barra ni velocidad.
+    priming = total > 0 and task.processed_bytes() <= 0 and task.bytes_fetched <= 0
+    upload_pct = 100.0 * task.processed_bytes() / total if total else 0.0
+    download_pct = task.download_percent()
+
+    if task.mode == "stream":
         lines += [
             f"<b>⬆️ {P.bar(upload_pct)} {P.percent_str(upload_pct)}</b>",
-            f"<b>📤 Subido: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {metric_speed(task.upload_speed)}</b>",
+            f"<b>📤 Subido: {P.human_size_compact(task.processed_bytes())} / "
+            f"{P.human_size_compact(total)} · {metric_speed(task.upload_speed, estimated)}</b>",
             f"<b>⬇️ {P.bar(download_pct)} {P.percent_str(download_pct)}</b>",
-            f"<b>📥 Descargado: {P.human_size_compact(task.bytes_fetched)} / {P.human_size_compact(total)} · {metric_speed(task.download_speed)}</b>",
+            f"<b>📥 Descargado: {P.human_size_compact(task.bytes_fetched)} / "
+            f"{P.human_size_compact(total)} · {P.human_speed(task.download_speed)}</b>",
         ]
     elif task.status == TaskStatus.DOWNLOADING:
         lines += [
             f"<b>⬇️ {P.bar(download_pct)} {P.percent_str(download_pct)}</b>",
-            f"<b>📥 Descargando: {P.human_size_compact(task.bytes_fetched)} / {P.human_size_compact(total)} · {metric_speed(task.download_speed)}</b>",
+            f"<b>📥 Descargando: {P.human_size_compact(task.bytes_fetched)} / "
+            f"{P.human_size_compact(total)} · "
+            f"{metric_speed(task.download_speed, task.download_speed <= 0)}</b>",
         ]
     else:
         lines += [
             f"<b>⬆️ {P.bar(upload_pct)} {P.percent_str(upload_pct)}</b>",
-            f"<b>📤 Subiendo: {P.human_size_compact(task.processed_bytes())} / {P.human_size_compact(total)} · {metric_speed(task.upload_speed)}</b>",
+            f"<b>📤 Subiendo: {P.human_size_compact(task.processed_bytes())} / "
+            f"{P.human_size_compact(total)} · {metric_speed(task.upload_speed, estimated)}</b>",
         ]
-    if not upload_starting and not download_starting:
-        eta_label = P.human_time_clock(eta) if eta is not None else "calculando…"
-        lines.append(f"<b>⏳ ETA: {eta_label}</b>")
-    if not upload_starting and task.status == TaskStatus.UPLOADING and task.parts_total and task.parts_done < task.parts_total:
-        lines.append(f"<b>🧩 Parte {min(task.parts_done + 1, task.parts_total)}/{task.parts_total} en subida</b>")
+
+    eta = task.eta_seconds()
+    eta_label = P.human_time_clock(eta) if eta is not None else "calculando…"
+    lines.append(f"<b>⏳ Restante: {eta_label} · ⏱️ {elapsed}</b>")
 
     detail: List[str] = []
-    if task.parts_total > 1:
-        detail.append(f"🧩 parte {task.parts_done}/{task.parts_total}")
-    if task.mode == "stream":
-        detail.append(f"⬇️ {P.human_size_compact(task.bytes_fetched)}")
+    if task.parts_total > 1 and task.status == TaskStatus.UPLOADING:
+        detail.append(f"🧩 parte {min(task.parts_done + 1, task.parts_total)}/{task.parts_total}")
+    elif task.parts_total > 1:
+        detail.append(f"🧩 {task.parts_done}/{task.parts_total} partes")
+    if estimated and task.status != TaskStatus.DOWNLOADING:
+        detail.append("📈 velocidad estimada" if not priming else "📈 estimando velocidad")
     if task.queue_position:
         detail.append(f"#{task.queue_position} en cola")
     if detail:
@@ -477,7 +489,7 @@ def _rel_time(ts: Optional[float]) -> str:
 # Estado / estadísticas.
 # ----------------------------------------------------------------------
 def status_text(*, bot_line: str, storage_line: str, settings, counts: dict,
-                paused: bool) -> str:
+                paused: bool, speeds_line: str = "") -> str:
     return cut(
         "\n".join([
             "<b>📊 Estado del sistema</b>",
@@ -487,6 +499,9 @@ def status_text(*, bot_line: str, storage_line: str, settings, counts: dict,
             "",
             "<b>☁️ Almacenamiento (toDus)</b>",
             f"   {storage_line}",
+            "",
+            "<b>📈 Velocidad aprendida</b>",
+            f"   {esc(speeds_line) if speeds_line else '—'}",
             "",
             "<b>⚙️ Configuración activa</b>",
             f"   • Máx. archivo: {code(P.human_size_compact(settings.max_file_mb * 1024 * 1024))}",

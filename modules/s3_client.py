@@ -128,7 +128,8 @@ def pretty_key(user_id: int) -> Tuple[str, str]:
     return folder, base_key
 
 
-def plan_parts(user_id: int, original_name: str, file_size: int, chunk_size: int) -> Tuple[str, List[PartSpec]]:
+def plan_parts(user_id: int, original_name: str, file_size: int, chunk_size: int,
+               folder: Optional[str] = None) -> Tuple[str, List[PartSpec]]:
     """
     Divide el archivo en partes y calcula las keys.
 
@@ -137,7 +138,14 @@ def plan_parts(user_id: int, original_name: str, file_size: int, chunk_size: int
     """
     chunk_size = max(1, int(chunk_size))
     num_parts = max(1, (file_size + chunk_size - 1) // chunk_size)
-    folder, base_key = pretty_key(user_id)
+
+    if folder:
+        # Reanudación: se reutiliza la carpeta del intento anterior para que las
+        # partes ya subidas sigan siendo válidas (mismas claves y mismos enlaces).
+        prefix = CONFIG.s3.key_prefix.strip("/")
+        base_key = f"{prefix}/tg_{user_id}/telegram/{folder}"
+    else:
+        folder, base_key = pretty_key(user_id)
 
     clean = safe_filename(original_name)
     stem, ext = os.path.splitext(clean)
@@ -269,6 +277,10 @@ class _NamespaceBackend:
             return True
         except Exception:
             return False
+
+    def head(self, key: str) -> Optional[dict]:
+        """La API antigua no expone HEAD: se omite la verificación."""
+        return None
 
     def ping(self) -> Tuple[bool, str]:
         try:
@@ -406,6 +418,30 @@ class S3Client:
                 username=task.username if task else "",
             )
         return self.backend.build_url(key)
+
+    # ------------------------------------------------------------------
+    # Verificación de integridad.
+    # ------------------------------------------------------------------
+    def verify_part(self, key: str, expected_size: int) -> Tuple[bool, str]:
+        """
+        Comprueba con HEAD que el objeto subido tiene el tamaño esperado.
+
+        Devuelve (ok, detalle). Si el endpoint no responde a HEAD se considera
+        correcto (no todos los S3 compatibles lo soportan) — nunca se rompe una
+        subida por un chequeo opcional.
+        """
+        try:
+            info = self.backend.head(key)
+        except Exception as exc:  # pragma: no cover
+            return True, f"sin verificación ({exc})"
+        if not info:
+            return True, "sin verificación (HEAD no soportado)"
+        size = int(info.get("size") or 0)
+        if size <= 0:
+            return True, "sin verificación (tamaño no informado)"
+        if size != expected_size:
+            return False, f"tamaño en el almacenamiento {size} != esperado {expected_size}"
+        return True, "ok"
 
     def delete_keys(self, keys: List[str]) -> Tuple[int, int]:
         """Borra una lista de keys. Devuelve (borradas, fallidas)."""

@@ -25,6 +25,7 @@ from pyrogram.enums import ParseMode
 
 from config import CONFIG
 from . import texts as T
+from .downloader import safe_local_name as safe_name
 from .queue import QUEUE, TaskStatus, UploadTask
 from .runtime_settings import RUNTIME_SETTINGS
 
@@ -123,26 +124,48 @@ async def _tick() -> None:
 
 
 def _sync_disk_progress(task: UploadTask) -> None:
-    """Recupera bytes escritos aunque el origen no dispare el callback."""
+    """
+    Red de seguridad: recupera los bytes realmente escritos en disco.
+
+    Si el callback del origen no se dispara (algunos servidores o ciertos
+    fallos de Pyrogram), el progreso quedaría congelado. Aquí se comprueba el
+    tamaño real de los temporales y se usa como suelo del progreso.
+    """
     if task.status != TaskStatus.DOWNLOADING:
         return
-    candidates = []
+
+    user_dir = os.path.join(CONFIG.download_dir, str(task.user_id))
+
     if task.mode == "stream":
-        chunks = os.path.join(CONFIG.download_dir, str(task.user_id), "chunks")
-        if os.path.isdir(chunks):
-            candidates = [
-                os.path.join(chunks, name)
-                for name in os.listdir(chunks)
-                if name.startswith(task.task_id) and name.endswith(".tmp")
-            ]
-    else:
-        candidates = [os.path.join(CONFIG.download_dir, str(task.user_id), task.filename)]
+        # Cada parte en vuelo tiene su propio temporal: se suma y se asigna a
+        # su número de parte (el total ya incluye las partes terminadas).
+        chunks = os.path.join(user_dir, "chunks")
+        if not os.path.isdir(chunks):
+            return
+        for name in os.listdir(chunks):
+            if not (name.startswith(task.task_id) and name.endswith(".tmp")):
+                continue
+            # formato: <task_id>_p001.tmp
+            try:
+                part_number = int(name.rsplit("_p", 1)[1].split(".")[0])
+            except (IndexError, ValueError):
+                continue
+            path = os.path.join(chunks, name)
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                continue
+            task.note_fetched(part_number, size)
+        return
+
+    # Modo clásico: un único archivo con el nombre saneado.
+    path = os.path.join(user_dir, safe_name(task.filename))
     try:
-        written = sum(os.path.getsize(path) for path in candidates if os.path.isfile(path))
+        size = os.path.getsize(path)
     except OSError:
         return
-    if written > task.bytes_fetched:
-        task.add_fetched(written - task.bytes_fetched)
+    if size > task.bytes_fetched:
+        task.set_fetched(size)
 
 
 # ----------------------------------------------------------------------
@@ -222,8 +245,36 @@ async def _finalize(task: UploadTask) -> None:
     if not ok:
         await send_status(task, text, keyboard=keyboard)
 
+    if task.status == TaskStatus.COMPLETED:
+        await _log_to_channel(task)
+
     if task.status == TaskStatus.FAILED and CONFIG.owner_id and task.user_id != CONFIG.owner_id:
         await _alert_owner(task)
+
+
+async def _log_to_channel(task: UploadTask) -> None:
+    """Copia un resumen de cada subida completada al canal de registro."""
+    channel = CONFIG.log_channel_id
+    if not channel or not _client:
+        return
+    try:
+        who = f"@{task.username}" if task.username else str(task.user_id)
+        from . import progress as P
+
+        await _client.send_message(
+            channel,
+            f"📤 <b>Nueva subida</b>\n"
+            f"👤 {T.esc(who)} ({T.code(str(task.user_id))})\n"
+            f"📄 {T.code(T.shorten(task.filename, 50))}\n"
+            f"📦 {P.human_size(task.file_size)} · 🧩 {task.parts_total} parte(s)\n"
+            f"⏱️ {P.human_time(task.duration())} · media "
+            f"{P.human_speed(task.avg_speed())}\n"
+            f"🆔 {T.code(task.task_id)}",
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("No se pudo registrar en el canal: %s", exc)
 
 
 async def _alert_owner(task: UploadTask) -> None:

@@ -85,6 +85,9 @@ async def _enqueue_single(client: Client, message: Message, url: str) -> None:
     size = int(info.get("size") or 0)
     name = info.get("filename") or url_to_filename(url)
 
+    if not await check_limits(user_id, message, size):
+        return
+
     if size and size > RUNTIME_SETTINGS.max_file_bytes:
         await reply(
             message,
@@ -121,6 +124,8 @@ async def _enqueue_many(client: Client, message: Message, urls: List[str]) -> No
         info = await _probe(url)
         size = int(info.get("size") or 0)
         name = info.get("filename") or url_to_filename(url)
+        if size and not await check_limits(user_id, message, size):
+            break
         if size and size > RUNTIME_SETTINGS.max_file_bytes:
             rejected.append(f"📏 {T.code(T.shorten(url, 44))} — {T.i('supera el máximo')}")
             continue

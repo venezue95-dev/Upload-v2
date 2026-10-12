@@ -24,6 +24,7 @@ import asyncio
 import logging
 import os
 import shutil
+import time
 from typing import Callable, List, Optional, Sequence
 
 from config import CONFIG
@@ -44,6 +45,7 @@ from .limiter import DynamicSemaphore
 from .queue import QUEUE, TaskCancelled, TaskStatus, UploadTask
 from .runtime_settings import RUNTIME_SETTINGS
 from .s3_client import ChunkUploadError, S3Client, S3Error, plan_parts, pool
+from .speedstats import SPEEDS
 
 log = logging.getLogger("s3_bot.pipeline")
 
@@ -229,10 +231,11 @@ def _choose_mode(pipeline_mode: str, source: dict, size: int, chunk_bytes: int) 
 async def _run_stream(client, task: UploadTask, source: dict, chunk_bytes: int,
                       per_task: int) -> None:
     size = task.file_size
-    base_name, parts = plan_parts(task.user_id, task.filename, size, chunk_bytes)
+    base_name, parts = plan_parts(task.user_id, task.filename, size, chunk_bytes,
+                                 folder=task.resume_folder)
     task.s3_base = base_name
     task.plan_parts(chunk_bytes, len(parts))
-    task.phase = "Descargando y subiendo"
+    task.phase = "Descargando y subiendo" if not task.resumed_parts else "Reanudando"
 
     log.info(
         "[%s] modo stream | %d partes de %.0f MB",
@@ -247,17 +250,13 @@ async def _run_stream(client, task: UploadTask, source: dict, chunk_bytes: int,
         finally:
             _remove(tmp)
 
-    await _run_parts(task, parts, process, per_task)
+    await _run_parts(task, parts, process, per_task, skip=set(task.resumed_parts))
 
 
 async def _fetch_part(client, task: UploadTask, source: dict, part, tmp: str) -> None:
-    last = {"n": 0}
-
     def cb(written: int) -> None:
-        delta = written - last["n"]
-        if delta > 0:
-            last["n"] = written
-            task.add_fetched(delta)
+        # Progreso por parte (monótono) → la barra de descarga no retrocede.
+        task.note_fetched(part.number, written)
 
     if source["kind"] == "telegram":
         await download_telegram_range(
@@ -300,6 +299,7 @@ async def _run_classic(client, task: UploadTask, source: dict, chunk_bytes: int,
             last["n"] = written
             task.add_fetched(delta)
 
+    download_started = time.monotonic()
     if source["kind"] == "telegram":
         await download_telegram_full(client, source["media"], local_path, task, progress=cb)
     else:
@@ -318,8 +318,11 @@ async def _run_classic(client, task: UploadTask, source: dict, chunk_bytes: int,
             f"el archivo descargado ({_size(size)}) supera el máximo ({_size(max_bytes)})"
         )
     task.set_fetched(size)
+    # Aprendemos la velocidad real de bajada para futuras estimaciones.
+    SPEEDS.note_download(size, time.monotonic() - download_started)
 
-    base_name, parts = plan_parts(task.user_id, task.filename, size, chunk_bytes)
+    base_name, parts = plan_parts(task.user_id, task.filename, size, chunk_bytes,
+                                 folder=task.resume_folder)
     task.s3_base = base_name
     task.plan_parts(chunk_bytes, len(parts))
     task.status = TaskStatus.UPLOADING
@@ -341,7 +344,7 @@ async def _run_classic(client, task: UploadTask, source: dict, chunk_bytes: int,
             _remove(tmp)
 
     try:
-        await _run_parts(task, parts, process, per_task)
+        await _run_parts(task, parts, process, per_task, skip=set(task.resumed_parts))
     finally:
         _remove(local_path)
 
@@ -354,6 +357,7 @@ async def _upload_part(task: UploadTask, part, tmp_path: str) -> None:
         raise TaskCancelled("cancelada por el usuario")
 
     task.part_started(part.number)
+    started = time.monotonic()
     loop = asyncio.get_running_loop()
     try:
         async with GLOBAL_UPLOAD_GATE:
@@ -366,6 +370,7 @@ async def _upload_part(task: UploadTask, part, tmp_path: str) -> None:
                 task,
                 part.label,
                 part.number,
+                part.length,
             )
     except TaskCancelled:
         task.part_failed(part.number)
@@ -379,15 +384,26 @@ async def _upload_part(task: UploadTask, part, tmp_path: str) -> None:
         task.failed_part = part.label
         raise ChunkUploadError(part.label, 1, 1, str(exc)) from exc
 
-    task.part_finished(part.number, part.length)
+    task.part_finished(part.number, part.length, time.monotonic() - started)
     QUEUE.note_bytes(part.length)
     log.debug("[%s] %s subida (%.1f MB)", task.task_id, part.label, part.length / 1024 / 1024)
 
 
 def _upload_sync(tmp_path: str, key: str, filename: str, task: UploadTask,
-                 label: str, part_number: int) -> None:
-    """Se ejecuta en un hilo del pool: sube el trozo y guarda su clave."""
+                 label: str, part_number: int, expected_size: int) -> None:
+    """
+    Se ejecuta en un hilo del pool: sube el trozo, lo verifica y guarda su clave.
+
+    La verificación (HEAD) detecta subidas truncadas: el PUT puede responder
+    "OK" y haber guardado menos bytes de los previstos.
+    """
     s3().upload_part(tmp_path, key, filename, task, label)
+
+    if RUNTIME_SETTINGS.get("verify_upload", True):
+        ok, detail = s3().verify_part(key, expected_size)
+        if not ok:
+            raise ChunkUploadError(label, 1, 1, f"verificación fallida: {detail}")
+
     with task._lock:
         task.keys_by_part[part_number] = key
 
@@ -396,10 +412,24 @@ def _upload_sync(tmp_path: str, key: str, filename: str, task: UploadTask,
 # Motor de partes en paralelo controlado.
 # ----------------------------------------------------------------------
 async def _run_parts(task: UploadTask, parts: Sequence, process: Callable,
-                     per_task: int) -> None:
-    """Ejecuta `process(part)` manteniendo como máximo `per_task` en vuelo."""
+                     per_task: int, skip: Optional[set] = None) -> None:
+    """
+    Ejecuta `process(part)` manteniendo como máximo `per_task` en vuelo.
+
+    `skip` contiene números de parte ya subidas en un intento anterior: no se
+    vuelven a descargar ni a subir (reanudación de tareas fallidas).
+    """
     running: set = set()
     first_error: Optional[BaseException] = None
+    skip = skip or set()
+
+    if skip:
+        pendientes = [p for p in parts if p.number not in skip]
+        log.info(
+            "[%s] reanudando: %d de %d partes ya estaban subidas",
+            task.task_id, len(parts) - len(pendientes), len(parts),
+        )
+        parts = pendientes
 
     async def collect(done: set) -> None:
         nonlocal first_error
