@@ -10,12 +10,22 @@ class ToDusError(RuntimeError):
     pass
 
 
+class _Resp:
+    status_code = 404
+
+
+class _Session:
+    def head(self, url, timeout=10):
+        return _Resp()
+
+
 class S3Client:
     """Imita la API real: put / get / head / delete / list / exists / build_url."""
 
     base_url = "https://s3.todus.cu/stream"
     fail_times = 0          # cuántas veces fallar antes de aceptar (para probar reintentos)
     put_delay = 0.01        # retardo simulado por subida
+    store_dir = None        # si se fija, cada "subida" se copia aquí (key -> archivo)
 
     def __init__(self, base_url=None, timeout=60, max_retries=3, chunk_size=65536, session=None):
         self.base = (base_url or self.base_url).rstrip("/")
@@ -23,6 +33,7 @@ class S3Client:
         self.max_retries = max_retries
         self.chunk_size = chunk_size
         self.uploads = []
+        self.session = _Session()
 
     def put(self, local_path, key, content_type=None, filename=None, inline=False,
             show_progress=True, extra_headers=None):
@@ -32,6 +43,10 @@ class S3Client:
         size = os.path.getsize(local_path)
         time.sleep(type(self).put_delay)
         self.uploads.append(key)
+        if type(self).store_dir:
+            import shutil
+            dest = os.path.join(type(self).store_dir, key.replace("/", "__"))
+            shutil.copyfile(local_path, dest)
         return {"success": True, "etag": "abc123", "size": size, "duration": 0.01,
                 "status_code": 200, "error": None}
 

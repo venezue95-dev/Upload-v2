@@ -140,7 +140,6 @@ class UploadTask:
         self.finished_at: Optional[float] = None
 
         # Progreso
-        self.file_size = int(file_size or 0)
         self.bytes_transferred = 0            # subido de verdad a S3
         self.parts_done = 0
         self.parts_total = 0
@@ -178,6 +177,7 @@ class UploadTask:
         self.attempts = 1
         self.max_attempts = max(1, int(max_attempts))
         self.deleted_from_s3 = False
+        self.retried_as: Optional[str] = None   # id de la copia creada al reintentar
         # True si la tarea quedó a medias por un apagado: se reanuda al arrancar.
         self.interrupted = False
 
@@ -208,6 +208,15 @@ class UploadTask:
     @property
     def is_active(self) -> bool:
         return self.status.is_active
+
+    @property
+    def is_retryable(self) -> bool:
+        """Solo las tareas fallidas o canceladas se pueden reintentar."""
+        return self.status in (TaskStatus.FAILED, TaskStatus.CANCELLED)
+
+    @property
+    def has_links(self) -> bool:
+        return bool(self.urls) and not self.deleted_from_s3
 
     def short_name(self, limit: int = 40) -> str:
         return self.filename if len(self.filename) <= limit else self.filename[: limit - 1] + "…"
@@ -300,6 +309,22 @@ class UploadTask:
         self._download_meter.reset()
         self._upload_meter.reset()
         self._processed_peak = 0
+        self.speed = 0.0
+
+    def reset_for_retry(self) -> None:
+        """Pone a cero el progreso antes de repetir el intento (reintento automático)."""
+        with self._lock:
+            self._inflight.clear()
+            self._part_fetched.clear()
+            self._fetched_total = 0
+            self.bytes_transferred = 0
+            self.parts_done = 0
+            self.keys_by_part.clear()
+        self.failed_part = None
+        self._processed_peak = 0
+        self._meter.reset()
+        self._download_meter.reset()
+        self._upload_meter.reset()
         self.speed = 0.0
 
     def mark_finished(self, status: TaskStatus, error: Optional[str] = None) -> None:
@@ -527,11 +552,50 @@ class UploadTask:
             resumed=True,
         )
         task.status_message_id = data.get("status_message_id")
-        task.attempts = int(data.get("attempts", 1)) + 1
+        task.attempts = int(data.get("attempts", 1))
         created = data.get("created_at")
         if created:
             task.created_at = float(created)
             task.queued_at = float(created)
+        return task
+
+    @classmethod
+    def from_history(cls, row: dict) -> "UploadTask":
+        """
+        Reconstruye una tarea terminada a partir de su fila en el historial.
+
+        Así los botones de un mensaje antiguo (enlaces, borrar, reintentar)
+        siguen funcionando aunque la tarea ya no esté en memoria.
+        """
+        user_id = int(row.get("user_id") or 0)
+        task = cls(
+            user_id=user_id,
+            chat_id=int(row.get("chat_id") or user_id),
+            message_id=int(row.get("message_id") or 0),
+            filename=row.get("filename") or "archivo.bin",
+            file_size=int(row.get("file_size") or 0),
+            source=row.get("source") or "telegram",
+            url=row.get("url") or None,
+            username=row.get("username") or "",
+            task_id=row.get("task_id"),
+        )
+        try:
+            task.status = TaskStatus(row.get("status") or "completed")
+        except ValueError:
+            task.status = TaskStatus.FAILED
+        task.keys = list(row.get("keys") or [])
+        task.urls = list(row.get("urls") or [])
+        task.parts_total = task.parts_done = int(row.get("parts") or 0)
+        task.s3_base = row.get("base") or None
+        task.error = row.get("error") or None
+        task.deleted_from_s3 = bool(row.get("deleted_at"))
+        created = float(row.get("created_at") or time.time())
+        finished = float(row.get("finished_at") or created)
+        task.created_at = task.queued_at = created
+        task.finished_at = finished
+        task.started_at = max(created, finished - float(row.get("duration") or 0.0))
+        if task.status == TaskStatus.COMPLETED:
+            task.bytes_transferred = task.file_size
         return task
 
 
@@ -661,17 +725,15 @@ class QueueManager:
                 return task
         return None
 
-    def submit(self, task: UploadTask) -> Tuple[bool, str]:
+    def submit(self, task: UploadTask, *, force: bool = False) -> Tuple[bool, str]:
         """
         Encola una tarea. Devuelve ``(ok, mensaje)``.
 
         Motivos de rechazo: cola pausada, cupo del usuario, cola global llena.
+        ``force=True`` se usa al reanudar tareas tras un reinicio: ya estaban
+        admitidas antes del apagado, así que no se vuelven a rechazar por cupos.
         """
-        owner = (
-            self.cfg.owner_id is not None
-            and task.user_id == self.cfg.owner_id
-            and task.priority >= self.cfg.queue.owner_priority
-        )
+        owner = force or self._is_owner_task(task)
         if self.paused and not owner:
             return False, (
                 "⏸ <b>La cola está pausada</b> por el administrador.\n"
@@ -759,6 +821,11 @@ class QueueManager:
             if task.is_final and task.finished_at and (now - task.finished_at) > max_age_seconds:
                 del self._tasks[task_id]
                 removed += 1
+        # El anti-spam solo necesita recordar a quien envió hace pocos segundos.
+        stale = time.time() - 3600
+        for user_id, ts in list(self._last_submit.items()):
+            if ts < stale:
+                del self._last_submit[user_id]
         if removed:
             self._mark_dirty()
         return removed
@@ -820,10 +887,16 @@ class QueueManager:
     # ------------------------------------------------------------------
     # Planificación.
     # ------------------------------------------------------------------
+    def _is_owner_task(self, task: UploadTask) -> bool:
+        return (
+            self.cfg.owner_id is not None
+            and task.user_id == self.cfg.owner_id
+            and task.priority >= self.cfg.queue.owner_priority
+        )
+
     def _effective_priority(self, task: UploadTask) -> float:
         """Prioridad + antigüedad (anti-inanición: +1 cada minuto de espera)."""
-        if (self.cfg.owner_id is not None and task.user_id == self.cfg.owner_id
-                and task.priority >= self.cfg.queue.owner_priority):
+        if self._is_owner_task(task):
             return 1_000_000.0
         waited_min = (time.time() - task.queued_at) / 60.0
         return task.priority + waited_min
@@ -837,37 +910,38 @@ class QueueManager:
         archivos. Dentro de cada grupo manda la prioridad (owner) y la
         antigüedad (anti-inanición).
         """
-        is_owner = (
-            self.cfg.owner_id is not None and task.user_id == self.cfg.owner_id
-            and task.priority >= self.cfg.queue.owner_priority
-        )
-        fairness = (
-            0 if is_owner else self._user_active.get(task.user_id, 0)
-            if self.cfg.queue.fair_scheduling else 0
-        )
+        if self._is_owner_task(task):
+            fairness = 0
+        elif self.cfg.queue.fair_scheduling:
+            fairness = self._user_active.get(task.user_id, 0)
+        else:
+            fairness = 0
         return (fairness, -self._effective_priority(task), task.queued_at)
+
+    # Cuántas tareas puede arrancar el owner POR ENCIMA del límite global
+    # ("carril rápido": su trabajo no espera detrás de la cola, pero tampoco
+    # puede lanzar 15 subidas a la vez y saturar el servidor).
+    OWNER_EXTRA_SLOTS = 1
 
     def _pick_next(self) -> Optional[UploadTask]:
         settings = RUNTIME_SETTINGS
-        owner_waiting = any(
-            self.cfg.owner_id is not None and t.user_id == self.cfg.owner_id
-            and t.priority >= self.cfg.queue.owner_priority
-            for t in self._waiting
-        )
-        if len(self._running) >= settings.max_concurrent_tasks and not owner_waiting:
-            return None
-        if self.paused and not owner_waiting:
-            return None
+        running = len(self._running)
+        regular_slot_free = running < settings.max_concurrent_tasks
+        owner_slot_free = running < settings.max_concurrent_tasks + self.OWNER_EXTRA_SLOTS
 
         candidates = []
         for task in self._waiting:
             if task.is_cancelled:
                 continue
-            is_owner = (
-                self.cfg.owner_id is not None and task.user_id == self.cfg.owner_id
-                and task.priority >= self.cfg.queue.owner_priority
-            )
-            if not is_owner and self._user_active.get(task.user_id, 0) >= settings.max_active_per_user:
+            if self._is_owner_task(task):
+                # El owner no tiene cupo por usuario y puede usar el carril rápido,
+                # incluso con la cola pausada.
+                if owner_slot_free:
+                    candidates.append(task)
+                continue
+            if self.paused or not regular_slot_free:
+                continue
+            if self._user_active.get(task.user_id, 0) >= settings.max_active_per_user:
                 continue
             candidates.append(task)
         if not candidates:
@@ -931,7 +1005,10 @@ class QueueManager:
             if not task.is_final:
                 task.mark_finished(TaskStatus.CANCELLED)
         except Exception as exc:  # noqa: BLE001
-            log.exception("[%s] error no controlado: %s", task.task_id, exc)
+            if type(exc).__name__ in ("S3Error", "ChunkUploadError"):
+                log.warning("[%s] falló la subida: %s", task.task_id, exc)
+            else:
+                log.exception("[%s] error no controlado: %s", task.task_id, exc)
             if not task.is_final:
                 task.mark_finished(TaskStatus.FAILED, str(exc))
         finally:
@@ -946,7 +1023,11 @@ class QueueManager:
             self.failed_count += 1
         elif task.status == TaskStatus.CANCELLED:
             self.cancelled_count += 1
-        self._record_history(task)
+        # Una tarea cortada por el apagado NO ha terminado: se reanuda al
+        # arrancar, así que ni se anota en el historial ni se avisa al usuario.
+        shutdown_pause = task.interrupted and task.cancel_reason == "apagado del bot"
+        if not shutdown_pause:
+            self._record_history(task)
         self._refresh_positions()
         self._mark_dirty()
         self.wake()
@@ -958,6 +1039,8 @@ class QueueManager:
             (task.bytes_transferred or task.bytes_fetched) / 1024 / 1024,
             task.duration(),
         )
+        if shutdown_pause:
+            return
         # Avisar al notificador (import diferido para evitar ciclos).
         try:
             from . import notifier
@@ -1028,12 +1111,12 @@ class QueueManager:
                     pass
                 self._wake.clear()
 
-                if not self.paused:
-                    while True:
-                        task = self._pick_next()
-                        if task is None:
-                            break
-                        self._start_task(task)
+                # _pick_next respeta la pausa (salvo el carril rápido del owner).
+                while True:
+                    task = self._pick_next()
+                    if task is None:
+                        break
+                    self._start_task(task)
 
                 now = time.time()
                 if now - self._last_beat > 15:

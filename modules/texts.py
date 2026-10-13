@@ -1,23 +1,24 @@
 """
 texts.py
 ========
-Todos los textos (HTML) y teclados inline del bot, centralizados para
-que la interfaz sea coherente y fácil de retocar.
+Todos los TEXTOS (HTML de Telegram) del bot. Los teclados están en
+``keyboards.py`` y la composición texto + teclado en ``views.py``.
 
 Reglas de estilo:
 - Títulos con emoji + <b>, datos en <code>, notas en <i>.
 - Los enlaces se muestran en <pre> para que Telegram ofrezca el botón
   "copiar" y se puedan copiar todos de una sola vez.
-- Cada mensaje se mantiene por debajo del límite de 4096 caracteres.
+- Todo mensaje pasa por ``cut()``: queda por debajo del límite de 4096
+  caracteres y SIEMPRE con el HTML bien cerrado (un <pre> sin cerrar hace
+  que Telegram rechace el mensaje entero y el usuario no recibe sus enlaces).
 """
 
 from __future__ import annotations
 
 import html
 import re
+import time
 from typing import List, Optional, Sequence, TYPE_CHECKING
-
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from . import progress as P
 from .queue import STATUS_ICON, STATUS_LABEL, TaskStatus
@@ -26,7 +27,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from .queue import UploadTask
 
 TG_LIMIT = 4000          # margen sobre el límite real de Telegram (4096)
-MAX_LISTED_URLS = 40     # máximo de enlaces listados en un mensaje
+URL_BLOCK_RESERVE = 700  # hueco que se deja a los textos que rodean a los enlaces
 
 
 # ----------------------------------------------------------------------
@@ -69,51 +70,113 @@ def metric_speed(value: float, estimated: bool = False) -> str:
     return f"{prefix}{P.human_speed(value)}"
 
 
+_TAG_RE = re.compile(r"(<[^>]*>)")
+_TAG_NAME_RE = re.compile(r"<\s*(/?)\s*([A-Za-z][A-Za-z0-9-]*)")
+_NO_BOLD_INSIDE = {"pre", "code", "b", "strong", "a"}
+
+
+def _tag_info(token: str):
+    """('open'|'close', nombre) de una etiqueta, o None si no lo es."""
+    match = _TAG_NAME_RE.match(token)
+    if not match:
+        return None
+    return ("close" if match.group(1) else "open"), match.group(2).lower()
+
+
 def _bold_non_link_text(text: str) -> str:
-    """Pone en negrita el texto visible, dejando intactos los enlaces en <pre>."""
-    parts = re.split(r"(<[^>]+>)", text)
+    """
+    Pone en negrita todo el texto visible (estilo del bot), dejando intactos
+    los bloques <pre>/<code> (enlaces) y lo que ya va en negrita.
+    """
     result: List[str] = []
-    in_pre = False
-    in_code = False
-    bold_depth = 0
-    for part in parts:
+    stack: List[str] = []
+    for part in _TAG_RE.split(text):
         if not part:
             continue
-        if part.startswith("<") and part.endswith(">"):
-            tag = part.lower()
-            if tag.startswith("<pre"):
-                in_pre = True
-            elif tag.startswith("</pre"):
-                in_pre = False
-            elif tag.startswith("<code") and not tag.startswith("</"):
-                in_code = True
-            elif tag.startswith("</code"):
-                in_code = False
-            elif tag.startswith("<b") and not tag.startswith("</"):
-                bold_depth += 1
-            elif tag.startswith("</b"):
-                bold_depth = max(0, bold_depth - 1)
+        info = _tag_info(part) if part.startswith("<") else None
+        if info:
+            kind, name = info
+            if kind == "open":
+                stack.append(name)
+            elif name in stack:
+                del stack[len(stack) - 1 - stack[::-1].index(name):]
             result.append(part)
-        elif in_pre or in_code or bold_depth or not part.strip():
+        elif not part.strip() or any(tag in _NO_BOLD_INSIDE for tag in stack):
             result.append(part)
         else:
             result.append(f"<b>{part}</b>")
     return "".join(result)
 
 
+def _open_tags(text: str) -> List[str]:
+    stack: List[str] = []
+    for token in _TAG_RE.findall(text):
+        info = _tag_info(token)
+        if not info:
+            continue
+        kind, name = info
+        if kind == "open":
+            stack.append(name)
+        elif name in stack:
+            del stack[len(stack) - 1 - stack[::-1].index(name):]
+    return stack
+
+
 def cut(text: str, limit: int = TG_LIMIT) -> str:
-    """Recorta y estiliza un mensaje respetando el límite de Telegram."""
+    """
+    Estiliza un mensaje y lo recorta (si hace falta) SIN dejar etiquetas abiertas.
+
+    Se corta en un salto de línea y se cierran las etiquetas pendientes; así
+    Telegram nunca recibe un <pre> o <b> sin cerrar.
+    """
     text = _bold_non_link_text(text)
     if len(text) <= limit:
         return text
-    return text[: limit - 20] + "\n<i>… (recortado)</i>"
+
+    note = "\n<i>… (recortado)</i>"
+    budget = limit - len(note) - 40          # 40 = hueco para cerrar etiquetas
+    head = text[:budget]
+    newline = head.rfind("\n")
+    if newline > budget // 2:
+        head = head[:newline]
+    # Nunca dejar una etiqueta o una entidad a medias.
+    head = re.sub(r"<[^>]*$", "", head)
+    head = re.sub(r"&[A-Za-z0-9#]*$", "", head)
+    closers = "".join(f"</{name}>" for name in reversed(_open_tags(head)))
+    return head + closers + note
 
 
 def shorten(name: str, limit: int = 42) -> str:
     if len(name) <= limit:
         return name
     keep = max(6, limit - 3)
-    return name[: keep // 2] + "…" + name[-keep // 2 :]
+    return name[: keep // 2] + "…" + name[-(keep // 2):]
+
+
+def mask_id(user_id) -> str:
+    """123456789 -> '…6789' (para no enseñar IDs completos a otros usuarios)."""
+    return "…" + str(user_id)[-4:]
+
+
+def who(task: "UploadTask") -> str:
+    return f"@{task.username}" if task.username else str(task.user_id)
+
+
+def _urls_block(urls: Sequence[str], room: int, *, numbered: bool) -> tuple:
+    """
+    Construye el bloque de enlaces ocupando como máximo ``room`` caracteres.
+    Devuelve (texto_sin_escapar, cuántos_enlaces_caben).
+    """
+    lines: List[str] = []
+    used = 0
+    for idx, url in enumerate(urls, start=1):
+        line = f"{idx:02d}. {url}" if numbered else url
+        cost = len(esc(line)) + 1
+        if used + cost > room:
+            break
+        lines.append(line)
+        used += cost
+    return "\n".join(lines), len(lines)
 
 
 # ----------------------------------------------------------------------
@@ -123,13 +186,16 @@ def status_badge(status: TaskStatus) -> str:
     return f"{STATUS_ICON.get(status, '❔')} {STATUS_LABEL.get(status, status.value)}"
 
 
-def task_line(task: "UploadTask", index: Optional[int] = None) -> str:
+def task_line(task: "UploadTask", index: Optional[int] = None,
+              show_user: bool = False) -> str:
     head = f"{index}. " if index is not None else ""
     line = (
         f"{head}{STATUS_ICON.get(task.status, '❔')} "
         f"{code(shorten(task.filename))} "
         f"<i>({P.human_size_compact(task.file_size)})</i>"
     )
+    if show_user:
+        line += f" · {esc(who(task))}"
     extra: List[str] = []
     if task.parts_total > 1:
         extra.append(f"🧩 {task.parts_done}/{task.parts_total}")
@@ -141,7 +207,8 @@ def task_line(task: "UploadTask", index: Optional[int] = None) -> str:
             else task.upload_speed
         )
         extra.append(metric_speed(current_speed))
-        extra.append(f"ETA {P.human_time(task.eta_seconds()) if task.eta_seconds() is not None else 'calculando…'}")
+        eta = task.eta_seconds()
+        extra.append(f"ETA {P.human_time(eta) if eta is not None else 'calculando…'}")
     if task.status == TaskStatus.QUEUED and task.queue_position:
         extra.append(f"#{task.queue_position} en cola")
     if extra:
@@ -166,7 +233,7 @@ def welcome_text(user_id: int, *, public: bool, is_owner: bool, cfg,
         f"• Rol: {esc(rol)} · Modo: {esc(modo)}\n"
         f"• 👑 Administrador: {b(admin_name or str(cfg.owner_id or 'no configurado'))}\n\n"
         f"<b>🚀 Cómo usarlo</b>\n"
-        f"1️⃣ Reenvía (o envía) un <b>documento / vídeo / audio</b>.\n"
+        f"1️⃣ Reenvía (o envía) un <b>documento / vídeo / audio / foto</b>.\n"
         f"2️⃣ O pega uno o varios <b>enlaces http(s)</b> directos.\n"
         f"3️⃣ El bot te da el <b>enlace directo</b> cuando termina.\n\n"
         f"<b>⚙️ Ajustes actuales</b>\n"
@@ -175,11 +242,11 @@ def welcome_text(user_id: int, *, public: bool, is_owner: bool, cfg,
         f"• Cola: {code(str(settings.max_concurrent_tasks) + ' tareas a la vez')} · "
         f"{code(str(settings.max_active_per_user) + ' por usuario')}\n\n"
         f"<b>🧭 Comandos</b>\n"
-        f"/cola — tus tareas y la posición en la cola\n"
-        f"/historial — tus últimas subidas (con enlaces)\n"
+        f"/cola — tus tareas y su posición\n"
+        f"/historial — tus subidas (con enlaces)\n"
+        f"/buscar — buscar en tu historial\n"
         f"/cancelar — cancelar todo lo tuyo\n"
-        f"/status — estado del bot y del almacenamiento\n"
-        f"/settings — configuración (owner)\n"
+        f"/status — estado del bot\n"
         f"/help — ayuda detallada"
     )
 
@@ -188,7 +255,7 @@ HELP_PAGES = {
     1: (
         "<b>📖 Ayuda 1/3 · Lo básico</b>\n\n"
         "<b>Subir desde Telegram</b>\n"
-        "Reenvía un documento, vídeo o audio al chat. Si el archivo supera "
+        "Reenvía un documento, vídeo, audio o foto al chat. Si el archivo supera "
         "el máximo configurado, el bot lo rechaza con un aviso claro.\n\n"
         "<b>Subir desde una URL</b>\n"
         "Pega un enlace directo (http/https). Puedes pegar <b>varios enlaces "
@@ -197,23 +264,22 @@ HELP_PAGES = {
         "Si reenvías un álbum de fotos/vídeos, cada archivo se encola por "
         "separado automáticamente.\n\n"
         "<b>Resultado</b>\n"
-        "Cuando termina, recibes el nombre, el tamaño, el número de partes y "
-        "los <b>enlaces directos</b> (en un bloque de copiado rápido)."
+        "Cuando termina, el mismo mensaje se convierte en el resultado con los "
+        "<b>enlaces directos</b> (en un bloque de copiado rápido)."
     ),
     2: (
-        "<b>📖 Ayuda 2/3 · La cola</b>\n\n"
+        "<b>📖 Ayuda 2/3 · La cola y los botones</b>\n\n"
         "El bot trabaja con una <b>cola justa</b>: hay un número limitado de "
-        "tareas simultáneas en todo el bot (ajustable) y cada usuario tiene su "
-        "propio cupo, de forma que <b>nadie se queda bloqueado</b> porque otro "
-        "subió 20 archivos.\n\n"
+        "tareas simultáneas en todo el bot y cada usuario tiene su propio cupo, "
+        "de forma que <b>nadie se queda bloqueado</b> porque otro subió 20 archivos.\n\n"
         "<b>Estados</b>\n"
         "⏳ en cola · 📥 descargando · 📤 subiendo · ✅ listo · ❌ error · 🛑 cancelado\n\n"
-        "<b>Lo que puedes hacer</b>\n"
-        "• /cola → ver posición, ETA y progreso de cada tarea.\n"
-        "• Botón <i>Cancelar</i> en cada tarea.\n"
-        "• /cancelar → cancelar todas tus tareas de golpe.\n"
-        "• Botón <i>Reintentar</i> en las tareas que fallaron.\n"
-        "• Botón <i>Enlaces .txt</i> para descargar la lista de enlaces."
+        "<b>Cómo se usan los botones</b>\n"
+        "• Cada mensaje de una subida tiene SUS botones: cancelar mientras "
+        "avanza; enlaces, borrar o reintentar cuando termina.\n"
+        "• /cola y /historial son listas: toca una tarea para abrir su ficha "
+        "y desde ahí hacer cualquier acción.\n"
+        "• 🏠 Inicio te lleva siempre al menú principal."
     ),
     3: (
         "<b>📖 Ayuda 3/3 · Partes y consejos</b>\n\n"
@@ -225,23 +291,24 @@ HELP_PAGES = {
         "Descarga todos los trozos en la misma carpeta y únelos en orden "
         "(<i>7-Zip → Add to archive → Split</i>, o <code>cat parte.* > archivo</code> "
         "en Linux/macOS).\n\n"
-        "<b>⚡️ Modo streaming</b>\n"
-        "El bot descarga y sube <b>a la vez</b>, parte por parte: es más rápido "
-        "y usa mucho menos disco. Si algún día falla, el owner puede poner "
-        "<code>STREAM_MODE=off</code> en el <code>.env</code>.\n\n"
+        "<b>Si una subida falla</b>\n"
+        "El botón 🔁 Reintentar reanuda: las partes que ya estaban en toDus no "
+        "se vuelven a subir.\n\n"
         "<b>Consejos</b>\n"
         "• Un archivo por mensaje = progreso más claro.\n"
         "• Espera a que termine una subida antes de mandar 10 más (o usa Álbum)."
     ),
 }
+HELP_PAGE_COUNT = len(HELP_PAGES)
 
 
 def help_text(page: int) -> str:
-    return cut(HELP_PAGES.get(page, HELP_PAGES[1]) + f"\n\n<i>Página {page}/3</i>")
+    page = page if page in HELP_PAGES else 1
+    return cut(HELP_PAGES[page] + f"\n\n<i>Página {page}/{HELP_PAGE_COUNT}</i>")
 
 
 # ----------------------------------------------------------------------
-# Progreso.
+# Progreso (mensaje de la tarea mientras se ejecuta).
 # ----------------------------------------------------------------------
 def progress_text(task: "UploadTask") -> str:
     """
@@ -332,6 +399,15 @@ def queued_text(task: "UploadTask") -> str:
 
 
 def final_text(task: "UploadTask") -> str:
+    if task.deleted_from_s3 or not task.urls:
+        return cut("\n".join([
+            "<b>🗑 Borrado de toDus</b>",
+            "",
+            f"<b>📄 Archivo:</b> {b(shorten(task.filename, 52))}",
+            f"📦 {P.human_size_compact(task.file_size)}",
+            i("Los enlaces ya no están disponibles."),
+        ]))
+
     n = len(task.urls)
     head = (
         "<b>✅ Listo · enlace directo</b>" if n == 1
@@ -348,14 +424,15 @@ def final_text(task: "UploadTask") -> str:
     if task.source == "url" and task.url:
         body.append(f"🔗 origen: {code(shorten(task.url, 60))}")
 
+    room = TG_LIMIT - URL_BLOCK_RESERVE - sum(len(x) + 1 for x in body)
     if n == 1:
-        body += ["", "<b>Enlace:</b>", pre(task.urls[0])]
+        block, shown = _urls_block(task.urls, room, numbered=False)
+        body += ["", "<b>Enlace:</b>", pre(block)]
     else:
-        listed = task.urls[:MAX_LISTED_URLS]
-        block = "\n".join(f"{i+1:02d}. {u}" for i, u in enumerate(listed))
+        block, shown = _urls_block(task.urls, room, numbered=True)
         body += ["", f"<b>Enlaces de las {n} partes:</b>", pre(block)]
-        if n > MAX_LISTED_URLS:
-            body.append(i(f"… y {n - MAX_LISTED_URLS} más (usa el botón .txt)"))
+        if shown < n:
+            body.append(i(f"… y {n - shown} más (usa el botón .txt)"))
         body.append(i("Descarga todas las partes y únelas en orden para "
                       "reconstruir el archivo original."))
     return cut("\n".join(body))
@@ -375,7 +452,7 @@ def failed_text(task: "UploadTask") -> str:
             f"<b>🧩 Progreso:</b> {b(f'{task.parts_done}/{task.parts_total} partes subidas')}"
         )
     lines += ["", f"<b>⚠️ Detalle:</b> {i(shorten(task.error or 'sin detalle', 220))}"]
-    if task.attempts < task.max_attempts_total():
+    if task.is_retryable and not getattr(task, "retried_as", None):
         lines += ["", i("Puedes reintentar con el botón de abajo.")]
     return cut("\n".join(lines))
 
@@ -393,6 +470,55 @@ def cancelled_text(task: "UploadTask") -> str:
     )
 
 
+def retry_queued_text(clone: "UploadTask", resumed: int = 0) -> str:
+    lines = [
+        "<b>♻️ Reintento en cola</b>",
+        f"📄 {code(shorten(clone.filename, 44))}",
+        f"🆔 {code(clone.task_id)} · intento {clone.attempts}/3",
+    ]
+    if resumed:
+        lines.append(
+            f"♻️ <b>Reanudando</b>: {b(str(resumed))} de {b(str(clone.parts_total))} "
+            f"partes ya estaban en toDus — no se vuelven a subir."
+        )
+    return cut("\n".join(lines))
+
+
+def task_card_text(task: "UploadTask", *, show_user: bool = False) -> str:
+    """Ficha completa de una tarea (se abre desde /cola y /historial)."""
+    lines = [
+        f"<b>{STATUS_ICON.get(task.status, '❔')} Ficha de la tarea</b>",
+        "",
+        f"🆔 {code(task.task_id)}",
+        f"📄 {code(shorten(task.filename, 48))}",
+        f"📦 {esc(P.human_size_compact(task.file_size))}",
+    ]
+    if show_user:
+        lines.append(f"👤 {esc(who(task))}")
+    lines.append(
+        f"🧭 Estado: {esc(STATUS_LABEL.get(task.status, task.status.value))}"
+        + (f" · {esc(task.phase)}" if task.phase and task.status.is_active else "")
+        + (" · 🗑 borrado de toDus" if task.deleted_from_s3 else "")
+    )
+    lines.append(f"⏱️ Duración: {esc(P.human_time(task.duration()))}")
+    if task.parts_total:
+        lines.append(f"🧩 Partes: {code(f'{task.parts_done}/{task.parts_total}')}")
+    if task.status.is_active:
+        lines.append(f"⚡️ {esc(P.human_speed(task.speed))} · "
+                     f"⏳ {esc(P.human_time(task.eta_seconds()))}")
+    if task.status == TaskStatus.QUEUED and task.queue_position:
+        lines.append(f"📍 Posición en cola: {code(task.queue_position)}")
+    if task.error:
+        lines.append(f"\n❗️ {esc(shorten(task.error, 200))}")
+    if task.has_links:
+        room = TG_LIMIT - URL_BLOCK_RESERVE - sum(len(x) + 1 for x in lines)
+        block, shown = _urls_block(task.urls, room, numbered=len(task.urls) > 1)
+        lines += ["", f"<b>Enlaces ({len(task.urls)}):</b>", pre(block)]
+        if shown < len(task.urls):
+            lines.append(i(f"… y {len(task.urls) - shown} más (usa el botón .txt)"))
+    return cut("\n".join(lines))
+
+
 # ----------------------------------------------------------------------
 # /cola
 # ----------------------------------------------------------------------
@@ -405,33 +531,31 @@ def queue_text(user_id: int, tasks: Sequence["UploadTask"], page: int,
     if not tasks:
         return (
             "<b>📋 Cola vacía</b>\n\n"
-            "No tienes tareas activas ni recientes.\n"
-            "Reenvía un archivo o pega un enlace para empezar."
+            + ("No hay tareas en el bot." if global_view
+               else "No tienes tareas activas ni recientes.\n"
+                    "Reenvía un archivo o pega un enlace para empezar.")
         )
 
     title = "<b>🌍 Cola global</b>" if global_view else "<b>📋 Tus tareas</b>"
     lines = [title, ""]
-    if not chunk:
-        lines.append(i("Nada en esta página."))
     for idx, task in enumerate(chunk, start=1 + (page - 1) * per_page):
-        lines.append(task_line(task, index=idx))
+        lines.append(task_line(task, index=idx, show_user=global_view))
         lines.append("")
 
     summary = _queue_summary_line(tasks)
     if summary:
         lines.append(summary)
+    lines.append(i("Toca una tarea para ver sus acciones."))
     if total_pages > 1:
         lines.append(i(f"Página {page}/{total_pages}"))
     return cut("\n".join(lines))
 
 
 def _queue_summary_line(tasks: Sequence["UploadTask"]) -> str:
-    from .queue import TaskStatus as S
-
-    active = sum(1 for t in tasks if t.status in (S.DOWNLOADING, S.UPLOADING))
-    waiting = sum(1 for t in tasks if t.status == S.QUEUED)
-    done = sum(1 for t in tasks if t.status == S.COMPLETED)
-    failed = sum(1 for t in tasks if t.status == S.FAILED)
+    active = sum(1 for t in tasks if t.status in (TaskStatus.DOWNLOADING, TaskStatus.UPLOADING))
+    waiting = sum(1 for t in tasks if t.status == TaskStatus.QUEUED)
+    done = sum(1 for t in tasks if t.status == TaskStatus.COMPLETED)
+    failed = sum(1 for t in tasks if t.status == TaskStatus.FAILED)
     parts = [
         f"🟢 {active} activas" if active else "",
         f"⏳ {waiting} en espera" if waiting else "",
@@ -442,41 +566,47 @@ def _queue_summary_line(tasks: Sequence["UploadTask"]) -> str:
     return "<i>" + " · ".join(parts) + "</i>" if parts else ""
 
 
-def queue_first_page(task: "UploadTask") -> int:
-    return 1
+def cancel_all_text(tasks: Sequence["UploadTask"], *, global_scope: bool) -> str:
+    title = "toda la cola" if global_scope else f"tus {len(tasks)} tarea(s)"
+    lines = [f"<b>🛑 ¿Cancelar {title}?</b>", ""]
+    lines += [
+        f"• {code(shorten(t.filename, 36))} — {esc(STATUS_LABEL[t.status])}"
+        for t in tasks[:10]
+    ]
+    if len(tasks) > 10:
+        lines.append(i(f"… y {len(tasks) - 10} más"))
+    return cut("\n".join(lines))
 
 
 # ----------------------------------------------------------------------
 # /historial
 # ----------------------------------------------------------------------
-def history_text(rows: Sequence[dict], page: int, per_page: int) -> str:
+def history_text(rows: Sequence[dict], page: int, per_page: int, *,
+                 title: str = "🗂 Historial") -> str:
     total_pages = max(1, (len(rows) + per_page - 1) // per_page)
     page = max(1, min(page, total_pages))
     chunk = rows[(page - 1) * per_page : page * per_page]
 
     if not rows:
-        return "<b>🗂 Historial</b>\n\nTodavía no has subido nada."
+        return f"<b>{esc(title)}</b>\n\nNo hay subidas que mostrar."
 
-    lines = [f"<b>🗂 Historial ({len(rows)})</b>", ""]
-    for row in chunk:
-        icon = {"completed": "✅", "failed": "❌", "cancelled": "🛑"}.get(row["status"], "❔")
+    lines = [f"<b>{esc(title)} ({len(rows)})</b>", ""]
+    for idx, row in enumerate(chunk, start=1 + (page - 1) * per_page):
+        icon = "🗑" if row.get("deleted_at") else {
+            "completed": "✅", "failed": "❌", "cancelled": "🛑"
+        }.get(row["status"], "❔")
         size = P.human_size_compact(row["file_size"])
         when = _rel_time(row["finished_at"] or row["created_at"])
-        lines.append(
-            f"{icon} {code(shorten(row['filename'], 34))} · {size} · {when}\n"
-            f"     {code(row['task_id'])}"
-        )
-        if row["status"] == "completed" and row["urls"]:
-            first = row["urls"][0] if isinstance(row["urls"], list) else str(row["urls"]).split("\n")[0]
-            lines.append(f"     🔗 {code(shorten(first, 60))}")
-        lines.append("")
-    lines.append(i(f"Página {page}/{total_pages} · usa los botones para navegar"))
+        parts = f" · 🧩 {row['parts']}" if (row.get("parts") or 0) > 1 else ""
+        lines.append(f"{idx}. {icon} {code(shorten(row['filename'], 34))} · {size}{parts} · {when}")
+    lines.append("")
+    lines.append(i("Toca una subida para ver sus enlaces o borrarla."))
+    if total_pages > 1:
+        lines.append(i(f"Página {page}/{total_pages}"))
     return cut("\n".join(lines))
 
 
 def _rel_time(ts: Optional[float]) -> str:
-    import time
-
     if not ts:
         return "—"
     delta = max(0, int(time.time() - ts))
@@ -547,7 +677,8 @@ def quota_text(*, used: int, limit: int) -> str:
     )
 
 
-def top_users_text(rows: Sequence[dict], *, is_owner_user: bool, owner_id: int = 0) -> str:
+def top_users_text(rows: Sequence[dict], *, viewer_id: int = 0,
+                   is_owner_user: bool = False, owner_id: int = 0) -> str:
     lines = [
         "<b>🏆 Top usuarios</b>",
         "<i>Ranking por espacio total subido</i>",
@@ -557,13 +688,19 @@ def top_users_text(rows: Sequence[dict], *, is_owner_user: bool, owner_id: int =
         lines.append("Todavía no hay datos suficientes.")
     else:
         for idx, row in enumerate(rows, start=1):
-            marker = " 👑" if int(row.get("user_id", 0)) == owner_id else ""
+            uid = int(row.get("user_id", 0) or 0)
+            marker = " 👑" if uid and uid == owner_id else ""
+            if uid == viewer_id:
+                label, marker = "tú", marker + " ⭐"
+            else:
+                label = str(uid) if is_owner_user else mask_id(uid)
             lines.append(
-                f"{idx}. {code(str(row.get('user_id', '—')))}{marker} · "
+                f"{idx}. {code(label)}{marker} · "
                 f"{P.human_size(int(row.get('bytes', 0) or 0))} · "
                 f"{int(row.get('uploads', 0) or 0)} subida(s)"
             )
-    lines += ["", i("Solo se muestran IDs; no se publican nombres de usuario.")]
+    if not is_owner_user:
+        lines += ["", i("Por privacidad solo se muestran los últimos 4 dígitos del ID.")]
     return cut("\n".join(lines))
 
 
@@ -586,12 +723,29 @@ def stats_text(global_stats: dict, top: Sequence[dict], counts: dict) -> str:
     if top:
         lines += ["", "<b>🏆 Top usuarios por datos subidos</b>"]
         for idx, row in enumerate(top, start=1):
-            who = row["username"] or str(row["user_id"])
+            name = row["username"] or str(row["user_id"])
             lines.append(
-                f"{idx}. {code(shorten(who, 20))} — {P.human_size(row['bytes'])} "
+                f"{idx}. {code(shorten(name, 20))} — {P.human_size(row['bytes'])} "
                 f"({row['uploads']} subidas)"
             )
     return cut("\n".join(lines))
+
+
+def admin_text(counts: dict, paused: bool, maintenance: bool) -> str:
+    flags = []
+    if paused:
+        flags.append("⏸ cola PAUSADA")
+    if maintenance:
+        flags.append("🛠 mantenimiento ACTIVO")
+    return cut("\n".join([
+        "<b>🛠 Administración</b>",
+        "",
+        f"🟢 Activas: {counts['active']}/{counts['max_concurrent']} · "
+        f"⏳ En espera: {counts['waiting']}",
+        "🚦 " + (" · ".join(flags) if flags else "todo en marcha"),
+        "",
+        i("Comandos: /ban /unban /baneados /usuarios /anuncio /mantenimiento /limpiar"),
+    ]))
 
 
 def system_text(info: dict) -> str:
@@ -632,7 +786,7 @@ def _uptime(seconds: float) -> str:
 # /settings
 # ----------------------------------------------------------------------
 def settings_text(values: dict, page: int, pages: int, *, is_owner_user: bool,
-                   keys: Sequence[str], labels: dict, units: dict) -> str:
+                  keys: Sequence[str], labels: dict, units: dict) -> str:
     lines = [
         f"<b>⚙️ Configuración · página {page}/{pages}</b>",
         "",
@@ -641,260 +795,10 @@ def settings_text(values: dict, page: int, pages: int, *, is_owner_user: bool,
         value = values[key]
         unit = units.get(key, "")
         lines.append(f"• {esc(labels[key])}: {code(f'{display_number(value)} {unit}'.strip())}")
-    lines += [
-        "",
-        i("Toca un valor para pasar al siguiente. Los cambios se aplican a las "
-          "tareas nuevas y se guardan en disco."),
-    ]
-    if not is_owner_user:
+    lines.append("")
+    if is_owner_user:
+        lines.append(i("Toca un valor para pasar al siguiente. Los cambios se aplican a las "
+                       "tareas nuevas y se guardan en disco."))
+    else:
         lines.append(i("ℹ️ Solo el owner puede modificar la configuración."))
     return cut("\n".join(lines))
-
-
-# ----------------------------------------------------------------------
-# Teclados inline.
-# ----------------------------------------------------------------------
-def main_menu_keyboard(*, is_owner_user: bool) -> InlineKeyboardMarkup:
-    rows = [
-        [
-            InlineKeyboardButton("📋 Mi cola", callback_data="menu:cola"),
-            InlineKeyboardButton("🗂 Historial", callback_data="menu:hist"),
-        ],
-        [
-            InlineKeyboardButton("📊 Estado", callback_data="menu:status"),
-            InlineKeyboardButton("📖 Ayuda", callback_data="menu:help:1"),
-        ],
-        [InlineKeyboardButton(
-            "👑 Top usuarios" if is_owner_user else "🏆 Top usuarios",
-            callback_data="menu:top",
-        )],
-        [InlineKeyboardButton("📊 Mi cuota", callback_data="menu:quota")],
-    ]
-    if is_owner_user:
-        rows.append([
-            InlineKeyboardButton("📈 Stats", callback_data="menu:stats"),
-            InlineKeyboardButton("🖥 Sistema", callback_data="menu:sys"),
-        ])
-        rows.append([InlineKeyboardButton("⚙️ Configuración", callback_data="menu:set")])
-    return InlineKeyboardMarkup(rows)
-
-
-def top_users_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
-    ])
-
-
-def quota_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏆 Top usuarios", callback_data="menu:top")],
-        [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
-    ])
-
-
-def status_keyboard(*, is_owner_user: bool) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton("📊 Mi cuota", callback_data="menu:quota")]]
-    if is_owner_user:
-        rows.append([
-            InlineKeyboardButton("📈 Stats", callback_data="menu:stats"),
-            InlineKeyboardButton("🖥 Sistema", callback_data="menu:sys"),
-        ])
-    rows.append([InlineKeyboardButton("🏠 Menú", callback_data="menu:home")])
-    return InlineKeyboardMarkup(rows)
-
-
-def help_keyboard(page: int) -> InlineKeyboardMarkup:
-    nav = []
-    if page > 1:
-        nav.append(InlineKeyboardButton("⬅️", callback_data=f"menu:help:{page-1}"))
-    nav.append(InlineKeyboardButton(f"{page}/3", callback_data="noop"))
-    if page < 3:
-        nav.append(InlineKeyboardButton("➡️", callback_data=f"menu:help:{page+1}"))
-    return InlineKeyboardMarkup([nav, [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")]])
-
-
-def queue_keyboard(tasks: Sequence["UploadTask"], page: int, per_page: int,
-                   *, is_owner_user: bool, global_view: bool = False) -> InlineKeyboardMarkup:
-    rows: List[List[InlineKeyboardButton]] = []
-    for idx, task in enumerate(tasks[(page - 1) * per_page : page * per_page],
-                               start=1 + (page - 1) * per_page):
-        if task.status in (TaskStatus.QUEUED, TaskStatus.DOWNLOADING, TaskStatus.UPLOADING):
-            rows.append([
-                InlineKeyboardButton(
-                    f"🛑 Cancelar {idx}",
-                    callback_data=f"t:cancel:{task.task_id}",
-                ),
-                InlineKeyboardButton(
-                    f"ℹ️ Detalle {idx}",
-                    callback_data=f"t:card:{task.task_id}",
-                ),
-            ])
-        elif task.status == TaskStatus.COMPLETED:
-            if task.deleted_from_s3 or not task.urls:
-                rows.append([InlineKeyboardButton(
-                    f"🗂 Historial {idx}", callback_data="menu:hist"
-                )])
-            else:
-                rows.append([
-                    InlineKeyboardButton(
-                        f"📄 Enlaces {idx}", callback_data=f"t:links:{task.task_id}"
-                    ),
-                    InlineKeyboardButton(
-                        f"🗑 Borrar {idx}", callback_data=f"t:delyes:{task.task_id}"
-                    ),
-                ])
-        elif task.status == TaskStatus.FAILED:
-            rows.append([
-                InlineKeyboardButton(
-                    f"🔁 Reintentar {idx}", callback_data=f"t:retry:{task.task_id}"
-                ),
-                InlineKeyboardButton("ℹ️ Detalle", callback_data=f"t:card:{task.task_id}"),
-            ])
-
-    total_pages = max(1, (len(tasks) + per_page - 1) // per_page)
-    if total_pages > 1:
-        nav = [
-            InlineKeyboardButton("⬅️", callback_data=f"cola:page:{max(1, page-1)}"),
-            InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"),
-            InlineKeyboardButton("➡️", callback_data=f"cola:page:{min(total_pages, page+1)}"),
-        ]
-        rows.append(nav)
-
-    actions: List[InlineKeyboardButton] = []
-    if not global_view:
-        actions.append(InlineKeyboardButton("🔄 Refrescar", callback_data="cola:refresh"))
-        actions.append(InlineKeyboardButton("🛑 Cancelar todas", callback_data="cola:cancelall"))
-        if is_owner_user:
-            actions.append(InlineKeyboardButton("🌍 Vista global", callback_data="cola:global"))
-    else:
-        actions.append(InlineKeyboardButton("🔄 Refrescar", callback_data="cola:global"))
-        actions.append(InlineKeyboardButton("🛑 Cancelar todo", callback_data="cola:cancelall"))
-        actions.append(InlineKeyboardButton("◀️ Mi cola", callback_data="cola:refresh"))
-    rows.append(actions)
-    rows.append([InlineKeyboardButton("🏠 Menú", callback_data="menu:home")])
-    return InlineKeyboardMarkup(rows)
-
-
-def task_keyboard(task: "UploadTask", *, is_owner_user: bool) -> InlineKeyboardMarkup:
-    rows: List[List[InlineKeyboardButton]] = []
-    if task.status in (TaskStatus.QUEUED, TaskStatus.DOWNLOADING, TaskStatus.UPLOADING):
-        rows.append([InlineKeyboardButton("🛑 Cancelar", callback_data=f"t:cancel:{task.task_id}")])
-    if task.status == TaskStatus.COMPLETED:
-        if task.deleted_from_s3 or not task.urls:
-            rows.append([InlineKeyboardButton("🗂 Mi historial", callback_data="menu:hist")])
-        else:
-            rows.append([
-                InlineKeyboardButton("📄 Enlaces .txt", callback_data=f"t:links:{task.task_id}"),
-                InlineKeyboardButton("🗑 Borrar de S3", callback_data=f"t:delyes:{task.task_id}"),
-            ])
-    if task.status in (TaskStatus.FAILED, TaskStatus.CANCELLED):
-        rows.append([InlineKeyboardButton("🔁 Reintentar", callback_data=f"t:retry:{task.task_id}")])
-    if is_owner_user and task.status in (TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.COMPLETED):
-        rows.append([InlineKeyboardButton("🧹 Quitar de la lista", callback_data=f"t:drop:{task.task_id}")])
-    rows.append([
-        InlineKeyboardButton("⬅️ Mi cola", callback_data="cola:refresh"),
-        InlineKeyboardButton("🏠 Menú", callback_data="menu:home"),
-    ])
-    return InlineKeyboardMarkup(rows)
-
-
-def cancel_all_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Sí, cancelar todo", callback_data="cola:cancelall:yes"),
-        InlineKeyboardButton("↩️ No", callback_data="cola:refresh"),
-    ], [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")]])
-
-
-def delete_confirm_keyboard(task_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Sí, borrar de S3", callback_data=f"t:delyes:yes:{task_id}"),
-        InlineKeyboardButton("↩️ No", callback_data=f"t:card:{task_id}"),
-    ], [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")]])
-
-
-def history_delete_confirm_keyboard(task_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Sí, borrar", callback_data=f"hist:delete:yes:{task_id}"),
-        InlineKeyboardButton("↩️ No", callback_data="menu:hist"),
-    ], [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")]])
-
-
-def history_keyboard(page: int, pages: int, rows: Sequence[dict] = ()) -> InlineKeyboardMarkup:
-    buttons = []
-    chunk = rows[(page - 1) * 5 : page * 5]
-    for row in chunk:
-        if row.get("urls"):
-            buttons.append([
-                InlineKeyboardButton("🔗 Enlaces", callback_data=f"hist:links:{row['task_id']}"),
-                InlineKeyboardButton("🗑 Borrar", callback_data=f"hist:delete:{row['task_id']}"),
-            ])
-        else:
-            buttons.append([InlineKeyboardButton("✅ Ya eliminado", callback_data="noop")])
-    nav = []
-    if page > 1:
-        nav.append(InlineKeyboardButton("⬅️", callback_data=f"hist:page:{page-1}"))
-    nav.append(InlineKeyboardButton(f"{page}/{pages}", callback_data="noop"))
-    if page < pages:
-        nav.append(InlineKeyboardButton("➡️", callback_data=f"hist:page:{page+1}"))
-    buttons.append(nav)
-    buttons.append([InlineKeyboardButton("🏠 Menú", callback_data="menu:home")])
-    return InlineKeyboardMarkup(buttons)
-
-
-def settings_keyboard(keys: Sequence[str], values: dict, labels: dict, units: dict,
-                      page: int, pages: int, *, is_owner_user: bool) -> InlineKeyboardMarkup:
-    rows: List[List[InlineKeyboardButton]] = []
-    for key in keys:
-        unit = units.get(key, "")
-        text = f"{labels[key]}: {values[key]} {unit}".strip()
-        cb = f"set:cycle:{key}" if is_owner_user else f"set:view:{key}"
-        rows.append([InlineKeyboardButton(text, callback_data=cb)])
-    nav: List[InlineKeyboardButton] = []
-    if page > 1:
-        nav.append(InlineKeyboardButton("⬅️", callback_data=f"set:page:{page-1}"))
-    nav.append(InlineKeyboardButton(f"{page}/{pages}", callback_data="noop"))
-    if page < pages:
-        nav.append(InlineKeyboardButton("➡️", callback_data=f"set:page:{page+1}"))
-    rows.append(nav)
-    if is_owner_user:
-        rows.append([
-            InlineKeyboardButton("♻️ Valores por defecto", callback_data="set:reset"),
-            InlineKeyboardButton("🔄 Refrescar", callback_data="set:refresh"),
-        ])
-    rows.append([InlineKeyboardButton("🏠 Menú", callback_data="menu:home")])
-    return InlineKeyboardMarkup(rows)
-
-
-def admin_keyboard(paused: bool) -> InlineKeyboardMarkup:
-    toggle = (
-        InlineKeyboardButton("▶️ Reanudar cola", callback_data="adm:resume")
-        if paused
-        else InlineKeyboardButton("⏸ Pausar cola", callback_data="adm:pause")
-    )
-    return InlineKeyboardMarkup([
-        [toggle, InlineKeyboardButton("📈 Stats", callback_data="menu:stats")],
-        [InlineKeyboardButton("🖥 Sistema", callback_data="menu:sys"),
-         InlineKeyboardButton("🌍 Cola global", callback_data="cola:global")],
-        [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
-    ])
-
-
-def links_buttons(task: "UploadTask") -> InlineKeyboardMarkup:
-    if not task.urls or task.deleted_from_s3:
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🗂 Mi historial", callback_data="menu:hist")],
-            [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
-        ])
-    rows = [[InlineKeyboardButton("📄 Descargar .txt", callback_data=f"t:links:{task.task_id}")]]
-    rows.append([InlineKeyboardButton("🗑 Borrar de toDus", callback_data=f"t:delyes:{task.task_id}")])
-    if len(task.urls) == 1:
-        rows.append([InlineKeyboardButton("🔗 Abrir enlace", url=task.urls[0])])
-    rows.append([InlineKeyboardButton("🏠 Menú", callback_data="menu:home")])
-    return InlineKeyboardMarkup(rows)
-
-
-def progress_keyboard(task_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛑 Cancelar", callback_data=f"t:cancel:{task_id}")],
-        [InlineKeyboardButton("🏠 Menú", callback_data="menu:home")],
-    ])

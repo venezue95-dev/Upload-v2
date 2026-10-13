@@ -33,6 +33,7 @@ from pyrogram import Client, idle
 from pyrogram.enums import ParseMode
 
 from config import CONFIG
+from modules import keyboards as K
 from modules import notifier, storage
 from modules.handlers import admin, basic, callbacks, cola, settings, upload, url
 from modules import texts as T
@@ -75,7 +76,7 @@ def register_handlers(app: Client) -> None:
     upload.register(app)
     url.register(app)
     callbacks.register(app)
-    log.info("Handlers registrados (8 módulos)")
+    log.info("Handlers registrados (7 módulos)")
 
 
 async def resume_pending_tasks(client: Client) -> None:
@@ -85,20 +86,24 @@ async def resume_pending_tasks(client: Client) -> None:
         return
     resumed = 0
     for task in tasks:
-        ok, reason = QUEUE.submit(task)
+        ok, reason = QUEUE.submit(task, force=True)   # ya estaba admitida antes del apagado
         if not ok:
             log.warning("No se pudo reanudar %s: %s", task.task_id, reason)
             continue
         resumed += 1
         # Avisamos al usuario de que su tarea continúa.
         try:
-            await client.send_message(
+            msg = await client.send_message(
                 task.chat_id,
                 f"♻️ <b>Tarea reanudada</b> tras el reinicio del bot\n"
                 f"📄 {T.code(T.shorten(task.filename, 50))}\n"
                 f"🆔 {T.code(task.task_id)}\n"
                 f"{T.i('Sigue el progreso con /cola.')}",
+                reply_markup=K.task_message_keyboard(task),
             )
+            # Desde ahora el progreso se muestra en este mensaje (el antiguo puede
+            # haberse borrado o quedado con datos viejos).
+            task.status_message_id = msg.id
         except Exception:  # noqa: BLE001
             pass
     if resumed:

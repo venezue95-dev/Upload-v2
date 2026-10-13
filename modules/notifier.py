@@ -25,7 +25,8 @@ from pyrogram.enums import ParseMode
 
 from config import CONFIG
 from . import texts as T
-from .downloader import safe_local_name as safe_name
+from . import views
+from .downloader import local_path_for
 from .queue import QUEUE, TaskStatus, UploadTask
 from .runtime_settings import RUNTIME_SETTINGS
 
@@ -38,6 +39,7 @@ _last_text: Dict[str, str] = {}
 _last_edit: Dict[str, float] = {}
 _edit_gate: Optional[asyncio.Semaphore] = None
 _owner_alert_at: float = 0.0
+_flood_until: float = 0.0       # no se edita nada hasta este instante (FloodWait)
 
 
 # ----------------------------------------------------------------------
@@ -75,6 +77,8 @@ async def _loop() -> None:
 
 async def _tick() -> None:
     now = time.time()
+    if now < _flood_until:
+        return
     interval = float(RUNTIME_SETTINGS.progress_interval)
     pending = []
 
@@ -85,35 +89,27 @@ async def _tick() -> None:
         if task.status.is_active:
             task.sample_speed()
 
-        text = (
-            T.queued_text(task)
-            if task.status == TaskStatus.QUEUED
-            else T.progress_text(task)
-        )
+        text, keyboard = views.task_message(task)
         # Las tareas en cola se refrescan más despacio (solo cambia la posición).
         min_interval = interval if task.status.is_active else max(3.0, interval)
         if text == _last_text.get(task.task_id) and (now - _last_edit.get(task.task_id, 0)) < 20:
             continue
         if (now - _last_edit.get(task.task_id, 0)) < min_interval:
             continue
-        pending.append((task, text))
+        pending.append((task, text, keyboard))
 
     if not pending:
         return
 
-    async def worker(task: UploadTask, text: str) -> None:
+    async def worker(task: UploadTask, text: str, keyboard) -> None:
         assert _edit_gate is not None
         async with _edit_gate:
-            ok = await edit_status(
-                task,
-                text,
-                keyboard=T.progress_keyboard(task.task_id),
-            )
+            ok = await edit_status(task, text, keyboard=keyboard)
         if ok:
             _last_text[task.task_id] = text
             _last_edit[task.task_id] = time.time()
 
-    await asyncio.gather(*(worker(t, txt) for t, txt in pending), return_exceptions=True)
+    await asyncio.gather(*(worker(t, txt, kb) for t, txt, kb in pending), return_exceptions=True)
     # Limpieza de cachés de tareas que ya no existen.
     if len(_last_text) > 500:
         alive = {t.task_id for t in QUEUE.all_tasks(limit=200)}
@@ -159,7 +155,7 @@ def _sync_disk_progress(task: UploadTask) -> None:
         return
 
     # Modo clásico: un único archivo con el nombre saneado.
-    path = os.path.join(user_dir, safe_name(task.filename))
+    path = local_path_for(task)
     try:
         size = os.path.getsize(path)
     except OSError:
@@ -194,7 +190,11 @@ async def edit_status(task: UploadTask, text: str, keyboard=None) -> bool:
             return False
         # Flood control: esperamos y reintentamos una vez en el próximo tick.
         if "FLOOD_WAIT" in msg:
-            log.warning("[%s] flood control de Telegram: %s", task.task_id, msg)
+            global _flood_until
+            wait = int(getattr(exc, "value", 0) or 0) or 10
+            _flood_until = time.time() + wait + 1
+            log.warning("[%s] flood control de Telegram: pausa de %ds en las ediciones",
+                        task.task_id, wait)
             return False
         log.debug("[%s] no se pudo editar el progreso: %s", task.task_id, exc)
         return False
@@ -231,15 +231,7 @@ def on_task_finished(task: UploadTask) -> None:
 
 async def _finalize(task: UploadTask) -> None:
     _last_text.pop(task.task_id, None)
-    if task.status == TaskStatus.COMPLETED:
-        text = T.final_text(task)
-        keyboard = T.links_buttons(task)
-    elif task.status == TaskStatus.CANCELLED:
-        text = T.cancelled_text(task)
-        keyboard = T.task_keyboard(task, is_owner_user=False)
-    else:
-        text = T.failed_text(task)
-        keyboard = T.task_keyboard(task, is_owner_user=False)
+    text, keyboard = views.task_message(task)
 
     ok = await edit_status(task, text, keyboard=keyboard)
     if not ok:

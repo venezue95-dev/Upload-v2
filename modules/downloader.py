@@ -16,16 +16,15 @@ espacio libre en disco antes de empezar.
 
 from __future__ import annotations
 
-import ipaddress
 import asyncio
+import ipaddress
 import logging
 import os
 import re
 import shutil
 import socket
-import time
 from typing import Callable, Optional, Tuple
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import requests
 
@@ -75,6 +74,19 @@ def safe_local_name(name: str, fallback: str = "descarga.bin") -> str:
     return name[:180]
 
 
+def local_path_for(task: UploadTask) -> str:
+    """
+    Ruta del archivo completo en modo clásico.
+
+    Lleva el id de la tarea para que dos tareas del mismo usuario con el mismo
+    nombre (p. ej. dos "video.mp4") no se pisen el temporal.
+    """
+    return os.path.join(
+        CONFIG.download_dir, str(task.user_id),
+        f"{task.task_id}_{safe_local_name(task.filename)}",
+    )
+
+
 def url_to_filename(url: str, fallback: str = "descarga_web.bin") -> str:
     parsed = urlparse(url)
     name = unquote(os.path.basename(parsed.path))
@@ -114,6 +126,37 @@ def check_url(url: str) -> Tuple[bool, str]:
     return True, "ok"
 
 
+async def acheck_url(url: str) -> Tuple[bool, str]:
+    """``check_url`` sin bloquear el event loop (resuelve DNS en un hilo)."""
+    return await asyncio.to_thread(check_url, url)
+
+
+MAX_REDIRECTS = 5
+_REDIRECT_CODES = (301, 302, 303, 307, 308)
+
+
+def _safe_request(session: requests.Session, method: str, url: str, **kwargs):
+    """
+    Petición que sigue las redirecciones a mano validando CADA salto.
+
+    Con ``allow_redirects=True`` un servidor público podía redirigir a
+    ``http://127.0.0.1/...`` o a la red interna y saltarse ``check_url``.
+    Bloqueante: llamar siempre desde un hilo.
+    """
+    for _ in range(MAX_REDIRECTS + 1):
+        ok, why = check_url(url)
+        if not ok:
+            raise RuntimeError(f"URL rechazada: {why}")
+        resp = session.request(method, url, allow_redirects=False, **kwargs)
+        location = resp.headers.get("location")
+        if resp.status_code in _REDIRECT_CODES and location:
+            resp.close()
+            url = urljoin(url, location)
+            continue
+        return resp
+    raise RuntimeError("demasiadas redirecciones")
+
+
 # ----------------------------------------------------------------------
 # Metadatos de una URL.
 # ----------------------------------------------------------------------
@@ -121,13 +164,15 @@ def probe_url(url: str, session: Optional[requests.Session] = None) -> dict:
     """HEAD (con fallback a GET) para conocer tamaño, nombre y rangos."""
     session = session or requests.Session()
     info = {"size": 0, "filename": "", "ranges": False, "content_type": ""}
-    headers = {"User-Agent": USER_AGENT}
+    headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}
+    r = None
 
     try:
-        r = session.head(url, allow_redirects=True, timeout=HTTP_TIMEOUT, headers=headers)
+        r = _safe_request(session, "HEAD", url, timeout=HTTP_TIMEOUT, headers=headers)
         if r.status_code >= 400 or "content-length" not in r.headers:
-            r = session.get(url, stream=True, allow_redirects=True,
-                            timeout=HTTP_TIMEOUT, headers=headers)
+            r.close()
+            r = _safe_request(session, "GET", url, stream=True,
+                              timeout=HTTP_TIMEOUT, headers=headers)
         info["size"] = int(r.headers.get("content-length") or 0)
         info["ranges"] = "bytes" in (r.headers.get("accept-ranges") or "").lower()
         info["content_type"] = r.headers.get("content-type", "")
@@ -140,16 +185,21 @@ def probe_url(url: str, session: Optional[requests.Session] = None) -> dict:
 
         # Algunos servidores no envían Accept-Ranges pero sí soportan Range.
         if not info["ranges"]:
+            r2 = None
             try:
-                r2 = session.get(url, headers={**headers, "Range": "bytes=0-0"},
-                                 stream=True, timeout=HTTP_TIMEOUT)
+                r2 = _safe_request(session, "GET", url, timeout=HTTP_TIMEOUT, stream=True,
+                                   headers={**headers, "Range": "bytes=0-0"})
                 info["ranges"] = r2.status_code == 206
-                r2.close()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
-        r.close()
-    except Exception as exc:
+            finally:
+                if r2 is not None:
+                    r2.close()
+    except Exception as exc:  # noqa: BLE001
         log.debug("probe_url(%s) falló: %s", url, exc)
+    finally:
+        if r is not None:
+            r.close()
     return info
 
 
@@ -170,41 +220,52 @@ def download_url_range(
     Descarga (total o parcialmente) una URL a ``dest_path``.
 
     Devuelve los bytes escritos. Lanza ``TaskCancelled`` si el usuario cancela.
+
+    - Se pide ``Accept-Encoding: identity``: con gzip, ``Content-Length`` es el
+      tamaño COMPRIMIDO y el archivo salía truncado.
+    - En descargas parciales con ``offset > 0`` se exige HTTP 206. Si el
+      servidor ignora ``Range`` y devuelve el archivo entero, el trozo
+      contendría los bytes del principio y el archivo final quedaría corrupto.
     """
-    headers = {"User-Agent": USER_AGENT}
-    if offset is not None and length is not None:
+    headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}
+    ranged = offset is not None and length is not None
+    if ranged:
         headers["Range"] = f"bytes={offset}-{offset + length - 1}"
 
     written = 0
-    with requests.get(url, stream=True, timeout=HTTP_TIMEOUT, headers=headers,
-                      allow_redirects=True) as r:
-        if offset is not None and r.status_code not in (200, 206):
-            raise RuntimeError(f"el servidor rechazó la descarga parcial (HTTP {r.status_code})")
+    with requests.Session() as session:
+        r = _safe_request(session, "GET", url, stream=True,
+                          timeout=HTTP_TIMEOUT, headers=headers)
+        try:
+            if ranged and (offset or 0) > 0 and r.status_code != 206:
+                raise RuntimeError(
+                    f"el servidor no admite descargas parciales (HTTP {r.status_code})"
+                )
+            r.raise_for_status()
+            total = int(r.headers.get("content-length") or 0)
+            limit = length if ranged else None
 
-        r.raise_for_status()
-        total = int(r.headers.get("content-length") or 0)
-        limit = length if length is not None else total or None
+            with open(dest_path, "wb") as fh:
+                for block in r.iter_content(chunk_size=512 * 1024):
+                    if task.is_cancelled:
+                        raise TaskCancelled("cancelada por el usuario")
+                    if not block:
+                        continue
+                    if limit is not None:
+                        remaining = limit - written
+                        if remaining <= 0:
+                            break
+                        block = block[:remaining]
+                    fh.write(block)
+                    written += len(block)
+                    if progress:
+                        progress(written)
+        finally:
+            r.close()
 
-        with open(dest_path, "wb") as fh:
-            for block in r.iter_content(chunk_size=512 * 1024):
-                if task.is_cancelled:
-                    raise TaskCancelled("cancelada por el usuario")
-                if not block:
-                    continue
-                if limit is not None:
-                    remaining = limit - written
-                    if remaining <= 0:
-                        break
-                    block = block[:remaining]
-                fh.write(block)
-                written += len(block)
-                if progress:
-                    progress(written)
-
-    if expected_size and written < expected_size:
-        raise RuntimeError(
-            f"descarga incompleta: {written} de {expected_size} bytes"
-        )
+    wanted = expected_size or (length if ranged else total)
+    if wanted and written < wanted:
+        raise RuntimeError(f"descarga incompleta: {written} de {wanted} bytes")
     return written
 
 
@@ -305,38 +366,3 @@ async def download_telegram_full(
         file_size=file_size,
         progress=progress,
     )
-
-
-# ----------------------------------------------------------------------
-# Limpieza de temporales.
-# ----------------------------------------------------------------------
-def cleanup_user_dir(path: str, keep_days: float = 1.0) -> int:
-    """Borra archivos temporales huérfanos de una carpeta."""
-    removed = 0
-    now = time.time()
-    if not os.path.isdir(path):
-        return 0
-    for entry in os.scandir(path):
-        try:
-            if entry.is_file() and (now - entry.stat().st_mtime) > keep_days * 86400:
-                os.remove(entry.path)
-                removed += 1
-            elif entry.is_dir() and entry.name == "chunks":
-                shutil.rmtree(entry.path, ignore_errors=True)
-        except OSError:
-            pass
-    return removed
-
-
-def cleanup_all_temp(base_dir: str) -> None:
-    """Limpia la carpeta de descargas al arrancar (no debe quedar nada)."""
-    try:
-        for entry in os.scandir(base_dir):
-            if entry.is_dir():
-                shutil.rmtree(entry.path, ignore_errors=True)
-            else:
-                os.remove(entry.path)
-    except FileNotFoundError:
-        pass
-    except OSError as exc:  # pragma: no cover
-        log.debug("cleanup_all_temp: %s", exc)

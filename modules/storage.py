@@ -25,6 +25,9 @@ log = logging.getLogger("s3_bot.storage")
 
 _LOCK = threading.RLock()
 _CONN: Optional[sqlite3.Connection] = None
+# Los filtros de Telegram consultan "¿está baneado?" en CADA mensaje: se guarda
+# en memoria (se carga al abrir la base y se actualiza con ban/unban).
+_BANNED: set = set()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -42,7 +45,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at   REAL,
     finished_at  REAL,
     duration     REAL,
-    base         TEXT DEFAULT ''
+    base         TEXT DEFAULT '',
+    deleted_at   REAL,
+    chat_id      INTEGER,
+    message_id   INTEGER,
+    url          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, finished_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -80,14 +87,23 @@ def init(cfg=None) -> None:
         conn = sqlite3.connect(path, check_same_thread=False, timeout=15)
         conn.row_factory = sqlite3.Row
         conn.executescript(SCHEMA)
-        # Migración suave para bases de datos creadas antes de la v1.3.
-        try:
-            conn.execute("ALTER TABLE tasks ADD COLUMN base TEXT DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass
+        # Migraciones suaves para bases de datos creadas con versiones anteriores.
+        for ddl in (
+            "ALTER TABLE tasks ADD COLUMN base TEXT DEFAULT ''",
+            "ALTER TABLE tasks ADD COLUMN deleted_at REAL",
+            "ALTER TABLE tasks ADD COLUMN chat_id INTEGER",
+            "ALTER TABLE tasks ADD COLUMN message_id INTEGER",
+            "ALTER TABLE tasks ADD COLUMN url TEXT",
+        ):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.commit()
+        _BANNED.clear()
+        _BANNED.update(int(r["user_id"]) for r in conn.execute("SELECT user_id FROM bans"))
         _CONN = conn
         log.info("Historial SQLite listo en %s", path)
 
@@ -102,22 +118,33 @@ def _conn() -> sqlite3.Connection:
 # ----------------------------------------------------------------------
 # Escritura.
 # ----------------------------------------------------------------------
+def _ordered_keys(task) -> List[str]:
+    """Claves de la tarea ordenadas por nº de parte (también en tareas fallidas)."""
+    by_part = getattr(task, "keys_by_part", None) or {}
+    if by_part:
+        return [by_part[n] for n in sorted(by_part) if by_part[n]]
+    return list(getattr(task, "keys", None) or [])
+
+
 def record_task(task, cfg=None) -> None:
     """Guarda (o actualiza) una tarea terminada y acumula estadísticas."""
     try:
         conn = _conn()
+        keys = _ordered_keys(task)
         with _LOCK:
             conn.execute(
                 """
                 INSERT INTO tasks (task_id, user_id, username, filename, file_size,
                                    source, status, parts, keys, urls, error,
-                                   created_at, finished_at, duration, base)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                   created_at, finished_at, duration, base,
+                                   chat_id, message_id, url)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     status=excluded.status, parts=excluded.parts, keys=excluded.keys,
                     urls=excluded.urls, error=excluded.error,
                     finished_at=excluded.finished_at, duration=excluded.duration,
-                    base=excluded.base
+                    base=excluded.base, chat_id=excluded.chat_id,
+                    message_id=excluded.message_id, url=excluded.url
                 """,
                 (
                     task.task_id,
@@ -128,13 +155,16 @@ def record_task(task, cfg=None) -> None:
                     task.source,
                     task.status.value,
                     int(task.parts_done or 0),
-                    "\n".join(task.keys or []),
+                    "\n".join(keys),
                     "\n".join(task.urls or []),
                     (task.error or "")[:500],
                     float(task.created_at or time.time()),
                     float(task.finished_at or time.time()),
                     float(task.duration()),
                     task.s3_base or "",
+                    int(getattr(task, "chat_id", 0) or 0),
+                    int(getattr(task, "message_id", 0) or 0),
+                    getattr(task, "url", None) or "",
                 ),
             )
             size = int(task.bytes_transferred or task.file_size or 0)
@@ -155,17 +185,19 @@ def record_task(task, cfg=None) -> None:
                     (task.user_id, task.username or "", time.time(), time.time(), size, parts),
                 )
             else:
+                # Solo los fallos cuentan como "fallidas"; cancelar no es fallar.
+                failed = 1 if task.status.value == "failed" else 0
                 conn.execute(
                     """
                     INSERT INTO users (user_id, username, first_seen, last_seen,
                                        uploads, failed, bytes, parts)
-                    VALUES (?,?,?,?,0,1,0,0)
+                    VALUES (?,?,?,?,0,?,0,0)
                     ON CONFLICT(user_id) DO UPDATE SET
                         username=excluded.username,
                         last_seen=excluded.last_seen,
-                        failed=users.failed+1
+                        failed=users.failed+excluded.failed
                     """,
-                    (task.user_id, task.username or "", time.time(), time.time()),
+                    (task.user_id, task.username or "", time.time(), time.time(), failed),
                 )
             conn.commit()
     except Exception as exc:  # pragma: no cover
@@ -173,14 +205,53 @@ def record_task(task, cfg=None) -> None:
 
 
 def mark_deleted(task_id: str) -> None:
-    """Elimina del historial persistido las claves y URLs borradas de toDus."""
+    """Marca la subida como borrada de toDus (se vacían claves y enlaces)."""
     try:
         conn = _conn()
         with _LOCK:
-            conn.execute("UPDATE tasks SET keys='', urls='' WHERE task_id=?", (task_id,))
+            conn.execute(
+                "UPDATE tasks SET keys='', urls='', deleted_at=? WHERE task_id=?",
+                (time.time(), task_id),
+            )
             conn.commit()
     except Exception as exc:  # pragma: no cover
         log.warning("mark_deleted falló: %s", exc)
+
+
+def update_links(task_id: str, keys: List[str], urls: List[str]) -> None:
+    """Borrado parcial: se conservan solo las claves/enlaces que siguen en toDus."""
+    try:
+        conn = _conn()
+        with _LOCK:
+            conn.execute(
+                "UPDATE tasks SET keys=?, urls=? WHERE task_id=?",
+                ("\n".join(keys), "\n".join(urls), task_id),
+            )
+            conn.commit()
+    except Exception as exc:  # pragma: no cover
+        log.warning("update_links falló: %s", exc)
+
+
+def touch_user(user_id: int, username: str = "") -> None:
+    """Registra al usuario la primera vez que habla (para /anuncio y /usuarios)."""
+    try:
+        conn = _conn()
+        now = time.time()
+        with _LOCK:
+            conn.execute(
+                """
+                INSERT INTO users (user_id, username, first_seen, last_seen)
+                VALUES (?,?,?,?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    username=CASE WHEN excluded.username!='' THEN excluded.username
+                                  ELSE users.username END,
+                    last_seen=excluded.last_seen
+                """,
+                (user_id, username or "", now, now),
+            )
+            conn.commit()
+    except Exception as exc:  # pragma: no cover
+        log.debug("touch_user falló: %s", exc)
 
 
 # ----------------------------------------------------------------------
@@ -209,14 +280,22 @@ def user_recent(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
     return [_row(r) for r in rows]
 
 
-def get_task(task_id: str, user_id: int) -> Optional[Dict[str, Any]]:
-    """Obtiene una tarea histórica únicamente si pertenece al usuario."""
+def get_task(task_id: str, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """
+    Obtiene una tarea histórica.
+
+    Con ``user_id`` solo si pertenece a ese usuario; con ``None`` (uso del
+    owner) devuelve la tarea de cualquiera.
+    """
     conn = _conn()
     with _LOCK:
-        row = conn.execute(
-            "SELECT * FROM tasks WHERE task_id=? AND user_id=?",
-            (task_id, user_id),
-        ).fetchone()
+        if user_id is None:
+            row = conn.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM tasks WHERE task_id=? AND user_id=?",
+                (task_id, user_id),
+            ).fetchone()
     return _row(row) if row else None
 
 
@@ -364,6 +443,7 @@ def ban_user(user_id: int, reason: str = "") -> None:
             (user_id, reason[:200], time.time()),
         )
         conn.commit()
+        _BANNED.add(int(user_id))
 
 
 def unban_user(user_id: int) -> bool:
@@ -371,17 +451,18 @@ def unban_user(user_id: int) -> bool:
     with _LOCK:
         cur = conn.execute("DELETE FROM bans WHERE user_id=?", (user_id,))
         conn.commit()
+        _BANNED.discard(int(user_id))
     return bool(cur.rowcount)
 
 
 def is_banned(user_id: int) -> bool:
-    try:
-        conn = _conn()
-        with _LOCK:
-            row = conn.execute("SELECT 1 FROM bans WHERE user_id=?", (user_id,)).fetchone()
-        return row is not None
-    except Exception:  # pragma: no cover
-        return False
+    """Consulta en memoria (se llama en cada mensaje y cada pulsación)."""
+    if _CONN is None:
+        try:
+            init()
+        except Exception:  # pragma: no cover
+            return False
+    return int(user_id) in _BANNED
 
 
 def banned_users() -> List[Dict[str, Any]]:
@@ -395,14 +476,17 @@ def banned_users() -> List[Dict[str, Any]]:
 # Búsqueda en el historial.
 # ----------------------------------------------------------------------
 def search_user_history(user_id: int, query: str, limit: int = 25) -> List[Dict[str, Any]]:
+    """Subidas completadas del usuario cuyo nombre contiene ``query``."""
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     conn = _conn()
     with _LOCK:
         rows = conn.execute(
             """
-            SELECT * FROM tasks WHERE user_id=? AND filename LIKE ?
+            SELECT * FROM tasks
+            WHERE user_id=? AND status='completed' AND filename LIKE ? ESCAPE '\\'
             ORDER BY finished_at DESC LIMIT ?
             """,
-            (user_id, f"%{query}%", limit),
+            (user_id, f"%{escaped}%", limit),
         ).fetchall()
     return [_row(r) for r in rows]
 

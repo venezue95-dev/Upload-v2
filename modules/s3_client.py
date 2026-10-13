@@ -1,25 +1,15 @@
 """
 s3_client.py
 ============
-Cliente de subida a toDus S3, con soporte para las DOS versiones de la
-librería ``todus``:
+Adaptador de la librería ``todus`` (``todus.S3Client``, v3.x) con:
 
-1. ``todus.S3Client``  (v3.x, la actual): cliente low-level con
-   ``put() / head() / delete() / build_url()``. **Es la que espera el bot.**
-2. ``todus.NamespaceManager`` (v2.x, antiguas): namespaces por usuario con
-   ``ns.upload()`` y ``ns.share_url()``.
-
-El bot detecta automáticamente cuál está instalada, así que si mañana
-cambian la librería el bot sigue funcionando. (El código original hacía
-``from todus import NamespaceManager`` directamente: con la versión actual
-eso rompía el arranque con ImportError.)
-
-Este módulo NO descarga nada: recibe archivos locales (o trozos) y los
-sube con:
 - reintentos por trozo con backoff exponencial y espera cancelable,
 - cancelación cooperativa desde el botón del bot,
-- límite global de subidas simultáneas (DynamicSemaphore, ajustable en
-  caliente desde /settings).
+- verificación opcional de tamaño (HEAD) tras cada subida,
+- borrado de claves y utilidades para trocear archivos.
+
+Este módulo NO descarga nada: recibe archivos locales (o trozos) y los sube.
+El límite global de subidas simultáneas (DynamicSemaphore) vive en pipeline.py.
 """
 
 from __future__ import annotations
@@ -108,6 +98,15 @@ def safe_filename(name: str) -> str:
     return name or "archivo.bin"
 
 
+_PART_RE = re.compile(r"\.part(\d{3,})(?:\.[^./]*)?$")
+
+
+def part_number_from_key(key: str) -> Optional[int]:
+    """'.../peli.part007.mkv' -> 7. Devuelve None si la clave no es de una parte."""
+    match = _PART_RE.search(os.path.basename(key or ""))
+    return int(match.group(1)) if match else None
+
+
 def pretty_key(user_id: int) -> Tuple[str, str]:
     """
     Devuelve (nombre_base_visible, carpeta_base_en_el_bucket).
@@ -167,10 +166,10 @@ def plan_parts(user_id: int, original_name: str, file_size: int, chunk_size: int
 
 
 # ----------------------------------------------------------------------
-# Backends (todus 3.x o 2.x).
+# Backend: todus.S3Client.
 # ----------------------------------------------------------------------
 class _LowLevelBackend:
-    """todus.S3Client (v3.x)."""
+    """Envoltorio fino sobre ``todus.S3Client``."""
 
     name = "todus.S3Client"
 
@@ -201,9 +200,8 @@ class _LowLevelBackend:
             )
 
     def build_url(self, key: str) -> str:
-        url = self.client.build_url(key)
-        # La lib devuelve ".../stream/users/..." (URL-encoded). Es la pública.
-        return url
+        # La lib devuelve ".../stream/users/..." (URL-encoded): es la URL pública.
+        return self.client.build_url(key)
 
     def delete(self, key: str) -> bool:
         try:
@@ -219,75 +217,23 @@ class _LowLevelBackend:
             return None
 
     def ping(self) -> Tuple[bool, str]:
-        # Comprobamos que el endpoint responde (404 esperado para una key random).
+        """
+        Comprueba que el endpoint contesta.
+
+        ``client.head()`` NO sirve para esto: devuelve ``None`` tanto cuando la
+        clave no existe (404) como cuando no hay red, así que siempre parecería
+        "accesible". Se hace una petición directa: cualquier respuesta HTTP
+        (aunque sea 404/403) significa que el endpoint está vivo.
+        """
         try:
             key = f"{CONFIG.s3.key_prefix}/_healthcheck_{uuid.uuid4().hex[:8]}"
-            self.client.head(key)
-            return True, "endpoint toDus accesible"
-        except Exception as exc:
+            url = self.client.build_url(key)
+            resp = self.client.session.head(url, timeout=min(10, CONFIG.s3.timeout))
+            if resp.status_code >= 500:
+                return False, f"el endpoint respondió HTTP {resp.status_code}"
+            return True, f"endpoint toDus accesible (HTTP {resp.status_code})"
+        except Exception as exc:  # noqa: BLE001
             return False, f"sin respuesta del endpoint: {exc}"
-
-
-class _NamespaceBackend:
-    """todus.NamespaceManager (v2.x, versiones antiguas)."""
-
-    name = "todus.NamespaceManager"
-
-    def __init__(self) -> None:
-        from todus import NamespaceManager  # type: ignore
-
-        self.manager = NamespaceManager()
-        self._cache: dict = {}
-        self._lock = threading.Lock()
-
-    def _namespace(self, user_id: int, username: str = ""):
-        name = f"tg_{user_id}"
-        with self._lock:
-            if name in self._cache:
-                return self._cache[name]
-        try:
-            if not self.manager.exists(name):
-                self.manager.create(name, description=f"@{username or 'unknown'}")
-            ns = self.manager.get_namespace(name)
-        except Exception as exc:
-            raise S3Error(f"No se pudo preparar el namespace {name}: {exc}") from exc
-        with self._lock:
-            self._cache[name] = ns
-        return ns
-
-    def put_file(self, local_path: str, key: str, filename: str, user_id: int = 0,
-                 username: str = "") -> None:
-        ns = self._namespace(user_id, username)
-        path = "/".join(key.split("/")[3:-1]) or "telegram"
-        ns.upload(local_path=local_path, path=path, original_name=filename,
-                  metadata={"from": "telegram"})
-
-    def build_url(self, key: str, user_id: int = 0, username: str = "") -> str:
-        ns = self._namespace(user_id, username)
-        # La key interna usada por la lib es el nombre del objeto subido.
-        obj_name = key.split("/")[-1]
-        obj_name = obj_name if not key.endswith(("/part", "")) else obj_name
-        share = ns.share_url(obj_name)
-        return share.url if hasattr(share, "url") else str(share)
-
-    def delete(self, key: str) -> bool:
-        try:
-            ns = self._namespace(0)
-            ns.delete(key.split("/")[-1])
-            return True
-        except Exception:
-            return False
-
-    def head(self, key: str) -> Optional[dict]:
-        """La API antigua no expone HEAD: se omite la verificación."""
-        return None
-
-    def ping(self) -> Tuple[bool, str]:
-        try:
-            self.manager  # construido correctamente
-            return True, "NamespaceManager listo (auth interna de la librería)"
-        except Exception as exc:
-            return False, f"librería todus no responde: {exc}"
 
 
 # ----------------------------------------------------------------------
@@ -296,41 +242,35 @@ class _NamespaceBackend:
 class S3Client:
     """Fachada única usada por el resto del bot."""
 
-    _backend = None
+    _backend: Optional[_LowLevelBackend] = None
     _lock = threading.Lock()
 
     def __init__(self, cfg=None) -> None:  # cfg se acepta por compatibilidad
         self.backend = self._get_backend()
 
     @classmethod
-    def _get_backend(cls):
+    def _get_backend(cls) -> _LowLevelBackend:
         if cls._backend is not None:
             return cls._backend
         with cls._lock:
-            if cls._backend is not None:
-                return cls._backend
-            try:
-                import todus  # noqa: F401
-            except Exception as exc:  # pragma: no cover
-                raise S3Error(
-                    "La librería 'todus' no está instalada. Instálala con:\n"
-                    "  pip install git+https://github.com/nyxthor-dev/todus-client.git"
-                ) from exc
+            if cls._backend is None:
+                try:
+                    import todus  # noqa: F401
+                except Exception as exc:  # pragma: no cover
+                    raise S3Error(
+                        "La librería 'todus' no está instalada. Instálala con:\n"
+                        "  pip install git+https://github.com/nyxthor-dev/todus-client.git"
+                    ) from exc
+                import todus as todus_mod
 
-            import todus as todus_mod
-
-            if hasattr(todus_mod, "S3Client"):
-                backend = _LowLevelBackend()
-            elif hasattr(todus_mod, "NamespaceManager"):
-                backend = _NamespaceBackend()
-            else:
-                raise S3Error(
-                    "La librería 'todus' instalada no expone S3Client ni "
-                    "NamespaceManager: revisa la versión."
-                )
-            cls._backend = backend
-            log.info("Backend de almacenamiento: %s", backend.name)
-            return backend
+                if not hasattr(todus_mod, "S3Client"):
+                    raise S3Error(
+                        "La librería 'todus' instalada no expone S3Client: "
+                        "actualízala a la versión 3.x."
+                    )
+                cls._backend = _LowLevelBackend()
+                log.info("Backend de almacenamiento: %s", cls._backend.name)
+            return cls._backend
 
     # ------------------------------------------------------------------
     # Subida de una parte (bloqueante; se llama desde un hilo).
@@ -342,9 +282,6 @@ class S3Client:
         filename: str,
         task: UploadTask,
         label: str,
-        *,
-        user_id: Optional[int] = None,
-        username: str = "",
     ) -> None:
         """Sube un trozo con reintentos. Lanza ChunkUploadError o TaskCancelled."""
         from .runtime_settings import RUNTIME_SETTINGS
@@ -360,12 +297,7 @@ class S3Client:
                 raise TaskCancelled("cancelada por el usuario")
             attempts += 1
             try:
-                if isinstance(self.backend, _NamespaceBackend):
-                    self.backend.put_file(local_path, key, filename,
-                                          user_id=user_id or task.user_id,
-                                          username=username or task.username)
-                else:
-                    self.backend.put_file(local_path, key, filename)
+                self.backend.put_file(local_path, key, filename)
                 return
             except TaskCancelled:
                 raise
@@ -411,12 +343,6 @@ class S3Client:
                 remaining -= len(block)
 
     def build_url(self, key: str, task: Optional[UploadTask] = None) -> str:
-        if isinstance(self.backend, _NamespaceBackend):
-            return self.backend.build_url(
-                key,
-                user_id=task.user_id if task else 0,
-                username=task.username if task else "",
-            )
         return self.backend.build_url(key)
 
     # ------------------------------------------------------------------
@@ -443,19 +369,27 @@ class S3Client:
             return False, f"tamaño en el almacenamiento {size} != esperado {expected_size}"
         return True, "ok"
 
-    def delete_keys(self, keys: List[str]) -> Tuple[int, int]:
-        """Borra una lista de keys. Devuelve (borradas, fallidas)."""
-        ok = 0
-        failed = 0
+    def delete_keys(self, keys: List[str]) -> Tuple[List[str], List[str]]:
+        """Borra una lista de keys. Devuelve (borradas, fallidas) como listas de keys."""
+        deleted: List[str] = []
+        failed: List[str] = []
         for key in keys:
-            if self.backend.delete(key):
-                ok += 1
-            else:
-                failed += 1
-        return ok, failed
+            (deleted if self.backend.delete(key) else failed).append(key)
+        return deleted, failed
 
     def ping(self) -> Tuple[bool, str]:
         try:
             return self.backend.ping()
         except Exception as exc:
             return False, str(exc)
+
+
+_CLIENT: Optional[S3Client] = None
+
+
+def get_client() -> S3Client:
+    """Cliente compartido por todo el bot (se crea la primera vez que se pide)."""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = S3Client(CONFIG.s3)
+    return _CLIENT

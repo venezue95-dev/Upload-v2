@@ -70,7 +70,7 @@ CYCLE_UNITS: Dict[str, str] = {
     "daily_quota_mb": "MB/día",
 }
 
-# Los 11 ajustes agrupados en 2 páginas (así caben en el teclado inline).
+# Los ajustes agrupados en páginas (así caben en el teclado inline).
 SETTINGS_PAGES: List[List[str]] = [
     [  # 1 · Cola y usuarios
         "max_concurrent_tasks",
@@ -106,12 +106,33 @@ DEFAULTS: Dict[str, Any] = {
     "max_queue_per_user": CONFIG.queue.max_queue_per_user,
     "max_queue_total": CONFIG.queue.max_queue_total,
     "rate_limit_sec": CONFIG.queue.rate_limit_sec,
-    "pipeline_mode": CONFIG.stream_mode if CONFIG.stream_mode in ("auto", "stream") else "auto",
+    "pipeline_mode": CONFIG.stream_mode,
     "progress_interval": CONFIG.progress_interval,
     "verify_upload": True,
     "daily_quota_mb": 0,
     "maintenance": False,
 }
+
+
+def _coerce(key: str, value: Any) -> Any:
+    """Convierte un valor leído de settings.json al tipo del ajuste (None = inválido)."""
+    default = DEFAULTS[key]
+    try:
+        if isinstance(default, bool):
+            return value if isinstance(value, bool) else None
+        if isinstance(default, int):
+            if isinstance(value, bool):
+                return None
+            return int(value)
+        if isinstance(default, float):
+            return float(value)
+        if isinstance(default, str):
+            if key == "pipeline_mode" and value not in CYCLE_OPTIONS["pipeline_mode"]:
+                return None
+            return str(value)
+    except (TypeError, ValueError):
+        return None
+    return value
 
 
 class RuntimeSettings:
@@ -211,10 +232,18 @@ class RuntimeSettings:
         except Exception as exc:
             log.warning("settings.json ilegible (%s); se usan valores del .env", exc)
             return
+        if not isinstance(data, dict):
+            log.warning("settings.json no es un objeto; se usan valores del .env")
+            return
         with self._lock:
             for key, value in data.items():
-                if key in DEFAULTS:
-                    self._values[key] = value
+                if key not in DEFAULTS:
+                    continue
+                coerced = _coerce(key, value)
+                if coerced is None:
+                    log.warning("settings.json: valor inválido para %s (%r); se ignora", key, value)
+                    continue
+                self._values[key] = coerced
         log.info("Ajustes cargados desde %s: %s", path, self._values)
 
     def _save(self) -> None:

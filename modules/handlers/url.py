@@ -10,6 +10,7 @@ Handler de enlaces http(s).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import List
@@ -18,20 +19,17 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 
 from .. import texts as T
-from ..downloader import check_url, probe_url, url_to_filename
+from ..downloader import acheck_url, probe_url, url_to_filename
 from ..queue import QUEUE
 from ..runtime_settings import RUNTIME_SETTINGS
-from .common import AUTHORIZED, check_limits, enqueue, reply
+from .common import AUTHORIZED, check_limits, enqueue, reply, spawn
 
 log = logging.getLogger("s3_bot.url")
 
 URL_RE = re.compile(r"https?://[^\s<>\"')]+", re.IGNORECASE)
 
-URL_FILTER = filters.regex(URL_RE) & ~filters.command(
-    ["start", "help", "status", "cola", "cancelar", "historial", "settings",
-     "stats", "usuarios", "anuncio", "pausar", "reanudar", "sistema", "limpiar",
-     "reintentar", "menu", "enlaces"]
-)
+# Cualquier mensaje con un enlace que NO sea un comando (/ban http://… no se encola).
+URL_FILTER = filters.regex(URL_RE) & ~filters.regex(r"^/")
 
 
 def extract_urls(text: str) -> List[str]:
@@ -56,16 +54,18 @@ def register(app: Client) -> None:
         if not await check_limits(user_id, message):
             return
 
+        # El sondeo de cada URL puede tardar hasta 25 s: se hace en segundo plano
+        # para no ocupar un trabajador de Pyrogram (y que los botones sigan vivos).
         if len(urls) == 1:
-            await _enqueue_single(client, message, urls[0])
+            spawn(_enqueue_single(client, message, urls[0]))
         else:
-            await _enqueue_many(client, message, urls)
+            spawn(_enqueue_many(client, message, urls))
 
 
 async def _enqueue_single(client: Client, message: Message, url: str) -> None:
     user_id = message.from_user.id
 
-    ok, why = check_url(url)
+    ok, why = await acheck_url(url)
     if not ok:
         await reply(message, f"<b>⛔️ Enlace no válido</b>\n\n{T.esc(why)}")
         return
@@ -113,15 +113,20 @@ async def _enqueue_many(client: Client, message: Message, urls: List[str]) -> No
     accepted: List[str] = []
     rejected: List[str] = []
 
-    for url in urls:
-        ok, why = check_url(url)
+    checks = await asyncio.gather(*(acheck_url(u) for u in urls))
+    valid: List[str] = []
+    for url, (ok, why) in zip(urls, checks):
         if not ok:
             rejected.append(f"⛔️ {T.code(T.shorten(url, 44))} — {T.i(T.shorten(why, 40))}")
-            continue
-        if QUEUE.find_duplicate_url(user_id, url):
+        elif QUEUE.find_duplicate_url(user_id, url):
             rejected.append(f"♻️ {T.code(T.shorten(url, 44))} — {T.i('ya en cola')}")
-            continue
-        info = await _probe(url)
+        else:
+            valid.append(url)
+
+    # Sondeo en paralelo: 10 enlaces tardan lo que el más lento, no la suma.
+    infos = await asyncio.gather(*(_probe(u) for u in valid))
+
+    for url, info in zip(valid, infos):
         size = int(info.get("size") or 0)
         name = info.get("filename") or url_to_filename(url)
         if size and not await check_limits(user_id, message, size):
@@ -134,7 +139,7 @@ async def _enqueue_many(client: Client, message: Message, urls: List[str]) -> No
             client, message, filename=name, file_size=size, source="url", url=url
         )
         if error:
-            rejected.append(f"🚦 {T.code(T.shorten(url, 44))} — {T.i(T.shorten(error, 40))}")
+            rejected.append(f"🚦 {T.code(T.shorten(url, 44))} — {T.i(T.shorten(_plain(error), 40))}")
             continue
         accepted.append(f"• {T.code(T.shorten(name, 36))} — {T.esc(_size(size) if size else 'tamaño desconocido')}")
 
@@ -156,9 +161,12 @@ async def _enqueue_many(client: Client, message: Message, urls: List[str]) -> No
         )
 
 
-async def _probe(url: str) -> dict:
-    import asyncio
+def _plain(html_text: str) -> str:
+    """Quita las etiquetas HTML de un motivo de rechazo (para citarlo dentro de <i>)."""
+    return re.sub(r"<[^>]+>", "", html_text).replace("\n", " ").strip()
 
+
+async def _probe(url: str) -> dict:
     try:
         return await asyncio.wait_for(asyncio.to_thread(probe_url, url), timeout=25)
     except Exception as exc:  # noqa: BLE001

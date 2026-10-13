@@ -5,13 +5,13 @@ Ejecutor de una tarea: descarga → divide en trozos → sube a toDus → finali
 
 Dos modos de trabajo (ajustable en /settings):
 
-- **stream** (por defecto cuando el origen lo permite): descarga y sube
-  *a la vez*. Cada trozo se descarga a un temporal pequeño y se sube
-  enseguida, así el disco usado es de unos pocos trozos y el tiempo total
-  baja mucho (descarga y subida se solapan).
-- **classic**: descarga todo el archivo y luego lo sube por trozos. Necesita
-  espacio para el archivo completo, pero es el modo más simple y sirve de
-  respaldo cuando el origen no soporta descargas parciales.
+- **classic** (modo ``auto`` por defecto): descarga todo el archivo y luego lo
+  sube por trozos. Necesita espacio para el archivo completo, pero las fases
+  se ven separadas (descarga → subida) y es el más robusto.
+- **stream** (``pipeline_mode=stream``): descarga y sube *a la vez*. Cada trozo
+  se descarga a un temporal pequeño y se sube enseguida, así el disco usado es
+  de unos pocos trozos. Solo se usa si el origen permite descargas parciales
+  (Telegram siempre; URLs con ``Accept-Ranges``); si no, cae a classic.
 
 En ambos modos el trabajo pesado de subida ocurre en hilos del pool global, y
 la subida simultánea de partes se limita con un semáforo dinámico
@@ -28,15 +28,17 @@ import time
 from typing import Callable, List, Optional, Sequence
 
 from config import CONFIG
+from . import keyboards as K
 from . import notifier
 from . import texts as T
 from .downloader import (
-    check_url,
+    acheck_url,
     download_telegram_full,
     download_telegram_range,
     download_url_range,
     ensure_dir,
     ensure_free_space,
+    local_path_for,
     probe_url,
     safe_local_name,
     url_to_filename,
@@ -44,7 +46,7 @@ from .downloader import (
 from .limiter import DynamicSemaphore
 from .queue import QUEUE, TaskCancelled, TaskStatus, UploadTask
 from .runtime_settings import RUNTIME_SETTINGS
-from .s3_client import ChunkUploadError, S3Client, S3Error, plan_parts, pool
+from .s3_client import ChunkUploadError, S3Client, S3Error, get_client, plan_parts, pool
 from .speedstats import SPEEDS
 
 log = logging.getLogger("s3_bot.pipeline")
@@ -52,15 +54,11 @@ log = logging.getLogger("s3_bot.pipeline")
 # Semáforo global de subidas (límite ajustable en caliente desde /settings).
 GLOBAL_UPLOAD_GATE = DynamicSemaphore(6, limit_fn=lambda: RUNTIME_SETTINGS.global_chunk_workers)
 
-_S3: Optional[S3Client] = None
 _MI_B = 1024 * 1024
 
 
 def s3() -> S3Client:
-    global _S3
-    if _S3 is None:
-        _S3 = S3Client(CONFIG.s3)
-    return _S3
+    return get_client()
 
 
 # ----------------------------------------------------------------------
@@ -84,6 +82,7 @@ async def run_task(client, task: UploadTask) -> None:
                     task.task_id, task.attempts - 1, task.max_attempts, exc,
                 )
                 task.error = str(exc)
+                task.reset_for_retry()
                 await _safe_status(
                     task,
                     f"♻️ <b>Reintentando</b> ({task.attempts}/{task.max_attempts})\n"
@@ -112,14 +111,8 @@ async def _run_once(client, task: UploadTask) -> None:
     if size and size > max_bytes:
         task.mark_finished(
             TaskStatus.FAILED,
-            f"Archivo demasiado grande: {_size(size)} (máximo {_size(max_bytes)})",
-        )
-        await _final_status(
-            task,
-            f"<b>❌ Archivo demasiado grande</b>\n\n"
-            f"📄 {T.code(T.shorten(name, 48))}\n"
-            f"📦 {T.esc(_size(size))} · 📏 máximo {T.esc(_size(max_bytes))}\n\n"
-            f"{T.i('Pide al owner que suba el límite en /settings.')}",
+            f"Archivo demasiado grande: {_size(size)} (máximo {_size(max_bytes)}). "
+            "Pide al owner que suba el límite en /settings.",
         )
         return
 
@@ -127,6 +120,11 @@ async def _run_once(client, task: UploadTask) -> None:
 
     # ---------------- 2. Modo de trabajo ----------------
     chunk_bytes = max(_MI_B, settings.chunk_bytes)
+    if task.resume_folder and task.chunk_size:
+        # Reanudación: las partes ya subidas se cortaron con el tamaño de trozo
+        # de entonces. Si el owner lo cambió entretanto, hay que conservarlo o
+        # el archivo reconstruido saldría corrupto.
+        chunk_bytes = task.chunk_size
     mode = _choose_mode(settings.pipeline_mode, source, size, chunk_bytes)
     task.mode = mode
 
@@ -144,11 +142,9 @@ async def _run_once(client, task: UploadTask) -> None:
         need += 2 * 1024 ** 3   # tamaño desconocido: reservamos 2 GB
     ok, detail = ensure_free_space(CONFIG.download_dir, need)
     if not ok:
-        task.mark_finished(TaskStatus.FAILED, detail)
-        await _final_status(
-            task,
-            f"<b>❌ Sin espacio en disco</b>\n\n{T.esc(detail)}\n\n"
-            f"{T.i('Avisa al owner: hay que liberar espacio en el servidor.')}",
+        task.mark_finished(
+            TaskStatus.FAILED,
+            f"Sin espacio en disco: {detail}. Avisa al owner para que libere espacio.",
         )
         return
 
@@ -182,11 +178,11 @@ async def _run_once(client, task: UploadTask) -> None:
 async def _resolve_source(client, task: UploadTask) -> dict:
     if task.source == "url":
         url = (task.url or "").strip()
-        ok, why = check_url(url)
+        ok, why = await acheck_url(url)
         if not ok:
             raise RuntimeError(f"URL rechazada: {why}")
         info = await asyncio.to_thread(probe_url, url)
-        name = info.get("filename") or url_to_filename(url)
+        name = info.get("filename") or task.filename or url_to_filename(url)
         return {
             "kind": "url",
             "url": url,
@@ -198,13 +194,18 @@ async def _resolve_source(client, task: UploadTask) -> dict:
 
     # Origen Telegram: recuperamos el mensaje (por si el bot se reinició).
     message = await client.get_messages(task.chat_id, task.message_id)
-    if message is None:
+    if message is None or getattr(message, "empty", False):
         raise RuntimeError("el mensaje original ya no está disponible en Telegram")
-    media = message.document or message.video or message.audio or message.voice
+    media = (
+        message.document or message.video or message.audio or message.voice
+        or message.video_note or message.photo
+    )
     if media is None:
         raise RuntimeError("el mensaje ya no contiene un archivo descargable")
     size = int(getattr(media, "file_size", 0) or 0)
-    name = getattr(media, "file_name", None) or f"{task.source}_{task.task_id}.bin"
+    # El nombre que vio el usuario al enviarlo (foto_123.jpg, nota_de_voz…) se
+    # conserva si Telegram no trae ``file_name``.
+    name = getattr(media, "file_name", None) or task.filename or f"archivo_{task.task_id}.bin"
     return {
         "kind": "telegram",
         "url": None,
@@ -216,12 +217,13 @@ async def _resolve_source(client, task: UploadTask) -> dict:
 
 
 def _choose_mode(pipeline_mode: str, source: dict, size: int, chunk_bytes: int) -> str:
-    if pipeline_mode == "stream":
-        return "stream" if size else "classic"
-    if pipeline_mode == "classic":
-        return "classic"
-    # auto: fases separadas para que el usuario vea claramente descarga → subida.
-    # El streaming sigue disponible de forma explícita desde /settings.
+    """
+    ``stream`` solo si el usuario lo pidió Y el origen permite descargas
+    parciales Y se conoce el tamaño; en cualquier otro caso, ``classic``.
+    ``auto`` equivale a classic (fases separadas y fáciles de seguir).
+    """
+    if pipeline_mode == "stream" and size and source.get("ranges"):
+        return "stream"
     return "classic"
 
 
@@ -287,8 +289,8 @@ async def _fetch_part(client, task: UploadTask, source: dict, part, tmp: str) ->
 # ----------------------------------------------------------------------
 async def _run_classic(client, task: UploadTask, source: dict, chunk_bytes: int,
                        per_task: int) -> None:
-    user_dir = os.path.join(CONFIG.download_dir, str(task.user_id))
-    local_path = os.path.join(user_dir, safe_local_name(task.filename))
+    local_path = local_path_for(task)
+    ensure_dir(os.path.dirname(local_path))
     task.phase = "Descargando"
 
     last = {"n": 0}
@@ -395,14 +397,21 @@ def _upload_sync(tmp_path: str, key: str, filename: str, task: UploadTask,
     Se ejecuta en un hilo del pool: sube el trozo, lo verifica y guarda su clave.
 
     La verificación (HEAD) detecta subidas truncadas: el PUT puede responder
-    "OK" y haber guardado menos bytes de los previstos.
+    "OK" y haber guardado menos bytes de los previstos. Si pasa, se repite la
+    subida una vez antes de dar la parte por fallida.
     """
-    s3().upload_part(tmp_path, key, filename, task, label)
-
-    if RUNTIME_SETTINGS.get("verify_upload", True):
+    verify = RUNTIME_SETTINGS.get("verify_upload", True)
+    for attempt in (1, 2):
+        s3().upload_part(tmp_path, key, filename, task, label)
+        if not verify:
+            break
         ok, detail = s3().verify_part(key, expected_size)
-        if not ok:
-            raise ChunkUploadError(label, 1, 1, f"verificación fallida: {detail}")
+        if ok:
+            break
+        if attempt == 2:
+            raise ChunkUploadError(label, 2, 2, f"verificación fallida: {detail}")
+        log.warning("[%s] %s: verificación fallida (%s); se repite la subida",
+                    task.task_id, label, detail)
 
     with task._lock:
         task.keys_by_part[part_number] = key
@@ -434,7 +443,10 @@ async def _run_parts(task: UploadTask, parts: Sequence, process: Callable,
     async def collect(done: set) -> None:
         nonlocal first_error
         for fut in done:
-            exc = fut.exception()
+            if fut.cancelled():
+                exc: Optional[BaseException] = TaskCancelled("tarea interrumpida")
+            else:
+                exc = fut.exception()
             if exc and first_error is None:
                 first_error = exc
 
@@ -463,12 +475,7 @@ async def _run_parts(task: UploadTask, parts: Sequence, process: Callable,
 # Mensajes auxiliares.
 # ----------------------------------------------------------------------
 async def _safe_status(task: UploadTask, text: str) -> None:
-    await notifier.edit_status(task, text, keyboard=T.progress_keyboard(task.task_id))
-
-
-async def _final_status(task: UploadTask, text: str) -> None:
-    if not await notifier.edit_status(task, text):
-        await notifier.send_status(task, text)
+    await notifier.edit_status(task, text, keyboard=K.task_message_keyboard(task))
 
 
 # ----------------------------------------------------------------------

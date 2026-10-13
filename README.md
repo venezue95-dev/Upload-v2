@@ -133,8 +133,10 @@ ni pegar saltos.
 | `/baneados` | **owner** | Lista de usuarios bloqueados con motivo y fecha |
 | `/mantenimiento` | **owner** | Activa/desactiva el modo mantenimiento (mira abajo) |
 
-**Botones dentro de cada tarea**: cancelar · detalle · reintentar · enlaces `.txt`
-· borrar de toDus · quitar de la lista (owner).
+**Botones** (un único modelo, igual en comandos y menús):
+- **Mensaje de una tarea**: solo acciones sobre ella (cancelar · reintentar · enlaces `.txt` · borrar de toDus). Nunca se convierte en un panel.
+- **Paneles** (`/start`, cola, historial, ajustes…): navegación y siempre un botón «🏠 Inicio». El owner tiene un único botón «🛠 Administración».
+- Los botones de mensajes antiguos siguen funcionando: la tarea se recupera del historial.
 
 ---
 
@@ -153,7 +155,10 @@ modules/
   storage.py            historial y estadísticas en SQLite (data/history.db)
   runtime_settings.py   ajustes en caliente (/settings) con persistencia
   limiter.py            semáforo dinámico (límite global de subidas)
-  texts.py              todos los mensajes y teclados
+  texts.py              todos los textos (HTML seguro, recorta sin romper etiquetas)
+  keyboards.py          todos los teclados y el esquema de callback_data
+  views.py              texto + teclado de cada pantalla (comandos y botones comparten)
+  actions.py            buscar / reintentar / borrar tareas (compartido)
   progress.py           formato de tamaños/velocidades/barras
   handlers/             interfaz con Telegram (solo validan y encolan)
 tests/                  pruebas sin Telegram ni toDus (ver abajo)

@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Dict, List
 
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
 from .. import texts as T
-from .common import AUTHORIZED, check_limits, enqueue, reply
+from .common import AUTHORIZED, check_limits, enqueue, reply, spawn
 from ..runtime_settings import RUNTIME_SETTINGS
 
 log = logging.getLogger("s3_bot.upload")
@@ -36,19 +37,16 @@ MEDIA_FILTER = (
     | filters.photo          # fotos comprimidas: se sube la resolución mayor
 )
 
-# Agrupación de álbumes: media_group_id -> lista de mensajes + tarea de volcado.
+# Agrupación de álbumes: media_group_id -> mensajes recibidos y marca del último.
 _GROUPS: Dict[str, List[Message]] = {}
-_GROUP_TASKS: Dict[str, asyncio.Task] = {}
-_GROUP_LOCK = asyncio.Lock()
-GROUP_WAIT = 1.5  # segundos de espera para juntar los archivos del álbum
+_LAST_SEEN: Dict[str, float] = {}
+GROUP_WAIT = 1.5  # segundos sin mensajes nuevos para dar el álbum por completo
 
 
 def _media_of(message: Message):
-    if message.photo:
-        # Las fotos llegan como varias resoluciones: se usa la más grande.
-        return max(message.photo.sizes, key=lambda size: getattr(size, "file_size", 0) or 0)
     return (
-        message.document
+        message.photo           # Pyrogram ya entrega la foto en su mayor resolución
+        or message.document
         or message.video
         or message.audio
         or message.voice
@@ -78,33 +76,33 @@ def _filename_of(message: Message) -> str:
 def register(app: Client) -> None:
     @app.on_message(MEDIA_FILTER & AUTHORIZED)
     async def _media_handler(client: Client, message: Message):
-        # --- Álbum: agrupamos y esperamos un instante a que lleguen todos ---
         group_id = message.media_group_id
-        if group_id:
-            async with _GROUP_LOCK:
-                _GROUPS.setdefault(group_id, []).append(message)
-                task = _GROUP_TASKS.get(group_id)
-                if task and not task.done():
-                    task.cancel()
-                _GROUP_TASKS[group_id] = asyncio.create_task(_flush_group(client, group_id))
+        if not group_id:
+            await _handle_one(client, message)
             return
 
-        await _handle_one(client, message)
+        # Álbum: se junta y solo el PRIMER mensaje lanza el volcado; cada mensaje
+        # nuevo retrasa el cierre del grupo (sin cancelar ni recrear tareas).
+        first = group_id not in _GROUPS
+        _GROUPS.setdefault(group_id, []).append(message)
+        _LAST_SEEN[group_id] = time.monotonic()
+        if first:
+            spawn(_flush_group(client, group_id))
 
-    async def _flush_group(client: Client, group_id: str) -> None:
-        try:
-            await asyncio.sleep(GROUP_WAIT)
-            async with _GROUP_LOCK:
-                messages = _GROUPS.pop(group_id, [])
-                _GROUP_TASKS.pop(group_id, None)
-            if not messages:
-                return
+
+async def _flush_group(client: Client, group_id: str) -> None:
+    try:
+        while time.monotonic() - _LAST_SEEN.get(group_id, 0) < GROUP_WAIT:
+            await asyncio.sleep(0.3)
+        messages = _GROUPS.pop(group_id, [])
+        _LAST_SEEN.pop(group_id, None)
+        if messages:
             messages.sort(key=lambda m: m.id)
             await _enqueue_batch(client, messages)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            log.exception("Álbum %s falló: %s", group_id, exc)
+    except Exception as exc:  # noqa: BLE001
+        _GROUPS.pop(group_id, None)
+        _LAST_SEEN.pop(group_id, None)
+        log.exception("Álbum %s falló: %s", group_id, exc)
 
 
 async def _handle_one(client: Client, message: Message) -> None:

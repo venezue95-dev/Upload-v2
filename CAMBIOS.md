@@ -1,3 +1,28 @@
+# 🛠 Revisión completa (última versión)
+
+Segunda pasada sobre **todo** el código (no solo los botones). Detalle:
+
+**Botones** — reescritos con un único esquema (`keyboards.py` + `views.py` + `callbacks.py`).
+Cada pulsación se responde una sola vez, hay control de acceso/baneo, y los mensajes
+de tarea ya no se sobrescriben con paneles (peleaban con el refresco del progreso).
+«Cancelar todas» del owner ya no vacía la cola de todo el bot; los botones de tareas
+antiguas funcionan desde el historial.
+
+**Bugs reales corregidos**
+- Subir una foto fallaba (`message.photo.sizes` no existe); fotos y notas de vídeo no se podían descargar.
+- Descargas por URL: una respuesta gzip truncaba el archivo; un servidor sin Range corrompía partes en streaming.
+- SSRF: las redirecciones saltaban la validación; la resolución DNS bloqueaba el bucle.
+- Handlers lentos (sondeo de URL, /anuncio, /status) bloqueaban los workers: ahora van en segundo plano.
+- Reintentos: perdían claves, numeraban mal las partes con huecos, ignoraban un cambio de tamaño de parte; `/reintentar` podía resubir una tarea completada.
+- Textos: listas largas dejaban `<pre>` sin cerrar y el mensaje final no llegaba.
+- Borrado de toDus: si fallaba alguna parte se perdían todos los enlaces.
+- `STREAM_MODE` on/off mal interpretado; `ping()` siempre decía OK; cancelado contaba como fallo; los baneos consultaban SQLite en cada mensaje.
+- Faltaba `.env.example` (tu `.env` no se ha tocado).
+
+El cálculo del progreso (`RateMeter`) no ha cambiado.
+
+---
+
 # 🛠 Cambios de la v2 — qué había, qué cambié y por qué
 
 Resumen honesto del trabajo sobre tu proyecto **Uplo** (bot toDus S3). Al final

@@ -264,15 +264,25 @@ async def main() -> int:
 
     # ------------------------------------------------------------------
     print("\n▶ Reanudación de partes ya subidas")
-    from modules.handlers.cola import _resume_state
+    from modules.actions import resume_state as _resume_state
 
     tarea = UploadTask(user_id=7, chat_id=7, filename="x.mkv", file_size=100)
-    tarea.s3_base = "tg_7/telegram/carpeta"
-    tarea.keys_by_part = {1: "tg_7/telegram/carpeta/x_001.mkv",
-                          2: "tg_7/telegram/carpeta/x_002.mkv"}
+    tarea.s3_base = "20260101-120000-ab12cd"
+    tarea.keys_by_part = {1: "users/tg_7/telegram/20260101-120000-ab12cd/x.part001.mkv",
+                          3: "users/tg_7/telegram/20260101-120000-ab12cd/x.part003.mkv"}
     folder, parts = _resume_state(tarea)
-    check("detecta la carpeta del intento anterior", folder == "tg_7/telegram/carpeta")
-    check("detecta las partes ya subidas", sorted(parts) == [1, 2], str(parts))
+    check("detecta la carpeta del intento anterior", folder == "20260101-120000-ab12cd", str(folder))
+    check("detecta las partes ya subidas (con huecos)", sorted(parts) == [1, 3], str(parts))
+    # Tras un reinicio solo queda el historial: el nº de parte sale del nombre.
+    storage.record_task(FakeTask(
+        task_id="r1", user_id=7, status=TaskStatus.FAILED, parts_total=3,
+        keys_by_part={3: "users/tg_7/telegram/20260202-000000-ffffff/y.part003.mkv",
+                      1: "users/tg_7/telegram/20260202-000000-ffffff/y.part001.mkv"},
+    ), CONFIG)
+    huerfana = UploadTask(user_id=7, chat_id=7, filename="y.mkv", file_size=100, task_id="r1")
+    folder2, parts2 = _resume_state(huerfana)
+    check("desde el historial se conservan los números de parte",
+          sorted(parts2) == [1, 3] and folder2 == "20260202-000000-ffffff", f"{folder2} {parts2}")
     vacia = UploadTask(user_id=7, chat_id=7, filename="y.mkv", file_size=100)
     check("una tarea nueva no reanuda nada", _resume_state(vacia) == (None, {}))
 

@@ -20,32 +20,27 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import platform
-import shutil
-import time
 from typing import Optional
 
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
+from pyrogram.errors import FloodWait
 from pyrogram.types import Message
 
 from config import CONFIG
-from .. import storage, texts as T
+from .. import storage, views
+from .. import texts as T
 from ..queue import QUEUE
 from ..runtime_settings import RUNTIME_SETTINGS
-from .common import OWNER, reply
+from .common import OWNER, reply, spawn
 
 log = logging.getLogger("s3_bot.admin")
-_boot_ts = time.time()
 
 
 def register(app: Client) -> None:
     @app.on_message(filters.command(["stats", "estadisticas"]) & OWNER)
     async def _stats(client: Client, message: Message):
-        data = storage.global_stats()
-        top = storage.top_users(5)
-        counts = QUEUE.counts()
-        await reply(message, T.stats_text(data, top, counts), keyboard=T.admin_keyboard(QUEUE.paused))
+        await reply(message, *views.stats_view())
 
     @app.on_message(filters.command(["usuarios", "users"]) & OWNER)
     async def _usuarios(client: Client, message: Message):
@@ -54,7 +49,7 @@ def register(app: Client) -> None:
             await reply(message, "👥 Todavía no hay usuarios registrados.")
             return
         lines = [f"<b>👥 Usuarios conocidos ({len(ids)})</b>", ""]
-        for user_id in ids[:60]:
+        for user_id in ids[:40]:
             stats = storage.user_stats(user_id) or {}
             active, waiting = QUEUE.user_load(user_id)
             who = stats.get("username") or ""
@@ -65,9 +60,9 @@ def register(app: Client) -> None:
                 f"{human_size(stats.get('bytes', 0))} en {stats.get('uploads', 0)} subidas"
                 + (f" · 🟢 {active} ⏳ {waiting}" if (active or waiting) else "")
             )
-        if len(ids) > 60:
-            lines.append(T.i(f"… y {len(ids) - 60} más"))
-        await reply(message, "\n".join(lines))
+        if len(ids) > 40:
+            lines.append(T.i(f"… y {len(ids) - 40} más"))
+        await reply(message, T.cut("\n".join(lines)))
 
     @app.on_message(filters.command("anuncio") & OWNER)
     async def _anuncio(client: Client, message: Message):
@@ -80,29 +75,26 @@ def register(app: Client) -> None:
             )
             return
         # Incluye usuarios históricos, no solo tareas que sigan en memoria.
-        ids = storage.all_user_ids(CONFIG)
-        if not ids:
-            ids = QUEUE.user_ids()
-        sent = failed = 0
-        progress = await reply(message, f"📣 Enviando a {len(ids)} usuarios…")
-        for user_id in ids:
-            try:
-                await client.send_message(
-                    user_id,
-                    f"📣 <b>Aviso del administrador</b>\n\n{T.esc(text)}",
-                    parse_mode=ParseMode.HTML,
-                )
-                sent += 1
-            except Exception:  # noqa: BLE001
-                failed += 1
-            await asyncio.sleep(0.05)   # evita el flood control
-        await reply(
-            message,
-            f"✅ <b>Anuncio finalizado</b>\n\n"
-            f"• Enviados: <b>{sent}</b>\n"
-            f"• Fallidos: <b>{failed}</b>",
-            keyboard=T.admin_keyboard(QUEUE.paused),
-        )
+        ids = storage.all_user_ids(CONFIG) or QUEUE.user_ids()
+
+        async def broadcast() -> None:
+            sent = failed = 0
+            await reply(message, f"📣 Enviando a {len(ids)} usuarios…")
+            for user_id in ids:
+                try:
+                    await _send_notice(client, user_id, text)
+                    sent += 1
+                except Exception:  # noqa: BLE001
+                    failed += 1
+                await asyncio.sleep(0.05)   # evita el flood control
+            await reply(
+                message,
+                f"✅ <b>Anuncio finalizado</b>\n\n"
+                f"• Enviados: <b>{sent}</b>\n"
+                f"• Fallidos: <b>{failed}</b>",
+            )
+
+        spawn(broadcast())   # no ocupa un trabajador de Pyrogram durante minutos
 
     @app.on_message(filters.command("pausar") & OWNER)
     async def _pausar(client: Client, message: Message):
@@ -114,7 +106,7 @@ def register(app: Client) -> None:
             "⏸ <b>Cola pausada</b>\n\n"
             "Las tareas en curso terminan, pero no arrancará ninguna nueva.\n"
             "Usa /reanudar para continuar.",
-            keyboard=T.admin_keyboard(True),
+            keyboard=views.admin_view()[1],
         )
 
     @app.on_message(filters.command("reanudar") & OWNER)
@@ -125,13 +117,12 @@ def register(app: Client) -> None:
         await reply(
             message,
             "▶️ <b>Cola reanudada</b>",
-            keyboard=T.admin_keyboard(False),
+            keyboard=views.admin_view()[1],
         )
 
     @app.on_message(filters.command(["sistema", "sys"]) & OWNER)
     async def _sistema(client: Client, message: Message):
-        info = await asyncio.to_thread(_system_info)
-        await reply(message, T.system_text(info), keyboard=T.admin_keyboard(QUEUE.paused))
+        await reply(message, *(await views.system_view()))
 
     @app.on_message(filters.command(["ban", "bloquear"]) & OWNER)
     async def _ban(client: Client, message: Message):
@@ -144,6 +135,9 @@ def register(app: Client) -> None:
                 + T.i("El id lo puedes ver en /usuarios. Los baneados no pueden "
                       "usar el bot ni ver sus comandos."),
             )
+            return
+        if target == CONFIG.owner_id:
+            await reply(message, "⚠️ No puedes bloquear al owner.")
             return
         reason = " ".join(parts[2:])[:200]
         storage.ban_user(target, reason)
@@ -181,7 +175,7 @@ def register(app: Client) -> None:
             lines.append(
                 f"• {T.code(row['user_id'])} — {T.esc(T.shorten(row.get('reason') or 'sin motivo', 40))}"
             )
-        await reply(message, "\n".join(lines))
+        await reply(message, T.cut("\n".join(lines)))
 
     @app.on_message(filters.command("mantenimiento") & OWNER)
     async def _mantenimiento(client: Client, message: Message):
@@ -208,7 +202,6 @@ def register(app: Client) -> None:
                 except OSError:
                     pass
         purged = storage.purge_older_than(90)
-        storage.init()  # asegura WAL tras el purge
         await reply(
             message,
             "<b>🧹 Limpieza completada</b>\n\n"
@@ -220,7 +213,7 @@ def register(app: Client) -> None:
 
 
 def _parse_user(raw: str) -> Optional[int]:
-    """Acepta '123456', '@usuario' o un enlace t.me; devuelve el id o None."""
+    """Acepta un id numérico ('123456'); devuelve el id o None."""
     raw = (raw or "").strip().rstrip(",.")
     if not raw:
         return None
@@ -229,49 +222,11 @@ def _parse_user(raw: str) -> Optional[int]:
     return None
 
 
-def _system_info() -> dict:
-    disk = shutil.disk_usage(CONFIG.download_dir if os.path.isdir(CONFIG.download_dir) else ".")
-    temp_size = 0
-    temp_files = 0
-    for root, _dirs, files in os.walk(CONFIG.download_dir):
-        for name in files:
-            try:
-                temp_size += os.path.getsize(os.path.join(root, name))
-                temp_files += 1
-            except OSError:
-                pass
-
-    mem_total = mem_used = 0
+async def _send_notice(client: Client, user_id: int, text: str) -> None:
+    """Envía el anuncio; si Telegram pide esperar (FloodWait) espera y reintenta una vez."""
+    body = f"📣 <b>Aviso del administrador</b>\n\n{T.esc(text)}"
     try:
-        with open("/proc/meminfo", "r", encoding="utf-8") as fh:
-            entries = {}
-            for line in fh:
-                key, _, value = line.partition(":")
-                entries[key.strip()] = value.strip()
-        mem_total = int(entries.get("MemTotal", "0 kB").split()[0]) * 1024
-        available = int(entries.get("MemAvailable", "0 kB").split()[0]) * 1024
-        mem_used = max(0, mem_total - available)
-    except Exception:  # pragma: no cover
-        pass
-
-    try:
-        load = ", ".join(f"{v:.2f}" for v in os.getloadavg())
-    except Exception:  # pragma: no cover
-        load = "n/d"
-
-    import threading
-
-    return {
-        "disk_free": disk.free,
-        "disk_total": disk.total,
-        "disk_percent": (disk.used / disk.total * 100) if disk.total else 0.0,
-        "mem_total": mem_total,
-        "mem_used": mem_used,
-        "cpu": os.cpu_count() or 1,
-        "load": load,
-        "threads": threading.active_count(),
-        "temp_size": temp_size,
-        "temp_files": temp_files,
-        "uptime": time.time() - _boot_ts,
-        "python": platform.python_version(),
-    }
+        await client.send_message(user_id, body, parse_mode=ParseMode.HTML)
+    except FloodWait as exc:
+        await asyncio.sleep(min(int(getattr(exc, "value", 5)) + 1, 60))
+        await client.send_message(user_id, body, parse_mode=ParseMode.HTML)

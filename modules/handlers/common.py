@@ -8,14 +8,16 @@ con el mensaje de cola).
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Set, Tuple
 
 from pyrogram import filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import InlineKeyboardMarkup, Message
 
 from config import CONFIG
+from .. import keyboards as K
 from .. import storage
 from .. import texts as T
 from ..queue import QUEUE, UploadTask
@@ -59,6 +61,19 @@ def _banned_filter():
     return filters.create(_flt, "BannedFilter")
 
 
+def _denied_filter():
+    """Mensajes privados de usuarios que NO están en BOT_ALLOWED_USERS (y no baneados)."""
+    async def _flt(_, __, message: Message) -> bool:
+        user = getattr(message, "from_user", None)
+        chat = getattr(message, "chat", None)
+        is_private = getattr(getattr(chat, "type", None), "name", "PRIVATE") == "PRIVATE"
+        return bool(
+            user and is_private and not is_authorized(user.id) and not storage.is_banned(user.id)
+        )
+
+    return filters.create(_flt, "DeniedFilter")
+
+
 def _owner_filter():
     async def _flt(_, __, message: Message) -> bool:
         user = getattr(message, "from_user", None)
@@ -70,6 +85,33 @@ def _owner_filter():
 AUTHORIZED = _authorized_filter()
 OWNER = _owner_filter()
 BANNED = _banned_filter()
+DENIED = _denied_filter()
+
+
+# ----------------------------------------------------------------------
+# Trabajo en segundo plano.
+# ----------------------------------------------------------------------
+_BACKGROUND: Set[asyncio.Task] = set()
+
+
+def spawn(coro) -> asyncio.Task:
+    """
+    Lanza una corrutina sin bloquear al trabajador de Pyrogram.
+
+    Cada handler ocupa un trabajador hasta que termina; si 12 usuarios pegan
+    enlaces a la vez y cada handler espera 25 s de sondeo, el bot dejaría de
+    responder (incluidos los botones). Los handlers lentos se delegan aquí.
+    """
+    task = asyncio.get_running_loop().create_task(coro)
+    _BACKGROUND.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        _BACKGROUND.discard(t)
+        if not t.cancelled() and t.exception():
+            log.error("Tarea en segundo plano falló: %r", t.exception())
+
+    task.add_done_callback(_done)
+    return task
 
 
 def username_of(user) -> str:
@@ -117,7 +159,8 @@ async def check_limits(user_id: int, message: Message,
                        incoming_bytes: int = 0) -> bool:
     """
     Puertas de entrada antes de crear una tarea: mantenimiento, baneo,
-    cuota diaria, anti-spam y cupos de cola. True = puede continuar.
+    cuota diaria y anti-spam. (Los cupos de cola los aplica ``QUEUE.submit``.)
+    True = puede continuar.
     """
     owner = can_manage(user_id)
     if RUNTIME_SETTINGS.get("maintenance", False) and not owner:
@@ -163,16 +206,6 @@ async def check_limits(user_id: int, message: Message,
         )
         return False
 
-    active, waiting = QUEUE.user_load(user_id)
-    if not owner and active + waiting >= RUNTIME_SETTINGS.max_active_per_user + RUNTIME_SETTINGS.max_queue_per_user:
-        await reply(
-            message,
-            f"🚦 <b>Límite alcanzado</b>\n\n"
-            f"Ya tienes {T.b(active + waiting)} tareas "
-            f"({active} activas + {waiting} en espera).\n"
-            f"Espera a que terminen o usa /cancelar.",
-        )
-        return False
     return True
 
 
@@ -213,7 +246,7 @@ async def enqueue(
     msg = await reply(
         message,
         T.queued_text(task),
-        keyboard=T.progress_keyboard(task.task_id),
+        keyboard=K.task_message_keyboard(task),
     )
     if msg is not None:
         task.status_message_id = msg.id

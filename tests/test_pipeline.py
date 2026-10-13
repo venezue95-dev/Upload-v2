@@ -37,6 +37,8 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tests", "stub_todus"))
 
 _TMP = tempfile.mkdtemp(prefix="todus-pipe-")
+STORE = os.path.join(_TMP, "store")
+os.makedirs(STORE, exist_ok=True)
 os.environ.update({
     "API_ID": "12345",
     "API_HASH": "test-hash",
@@ -90,8 +92,33 @@ def wait_until(cond, timeout: float = 30.0) -> bool:
 # Servidor HTTP local.
 # ----------------------------------------------------------------------
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    """SimpleHTTPRequestHandler + soporte de ``Range`` (206) como un servidor real."""
+
     def log_message(self, *args):  # silencio
         pass
+
+    def do_GET(self):
+        rng = self.headers.get("Range")
+        path = self.translate_path(self.path)
+        if not rng or not os.path.isfile(path):
+            return super().do_GET()
+        size = os.path.getsize(path)
+        start, _, end = rng.replace("bytes=", "").partition("-")
+        start = int(start or 0)
+        end = min(int(end) if end else size - 1, size - 1)
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            data = fh.read(end - start + 1)
+        self.send_response(206)
+        self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Accept-Ranges", "bytes")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def end_headers(self):
+        self.send_header("Accept-Ranges", "bytes")
+        super().end_headers()
 
 
 class _Server(socketserver.ThreadingTCPServer):
@@ -130,6 +157,25 @@ async def run_single(task: UploadTask, timeout: float = 60) -> None:
         raise AssertionError(f"la tarea no terminó: {task.status} {task.error}")
 
 
+def _sha(path: str) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _stored_sha(task: UploadTask) -> str:
+    """Une las partes guardadas por el stub, en orden, y devuelve su sha256."""
+    import hashlib
+    h = hashlib.sha256()
+    for key in task.keys:
+        with open(os.path.join(STORE, key.replace("/", "__")), "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()
+
+
 def leftovers() -> int:
     count = 0
     for root, _dirs, files in os.walk(CONFIG.download_dir):
@@ -154,6 +200,8 @@ async def test_stream_mode(base_url: str, size: int) -> None:
     check("nombres de partes correctos",
           all(".part00" in u for u in task.urls), str(task.urls[0]))
     check("no deja temporales", leftovers() == 0, f"({leftovers()} archivos)")
+    check("el contenido subido es idéntico al original (sin corrupción)",
+          _stored_sha(task) == _sha(os.path.join(_TMP, "www", "datos_stream.bin")))
 
 
 async def test_classic_mode(base_url: str, size: int) -> None:
@@ -165,6 +213,8 @@ async def test_classic_mode(base_url: str, size: int) -> None:
     check("usa modo clásico", task.mode == "classic", task.mode)
     check("sube los 12 MB", task.bytes_transferred == size, str(task.bytes_transferred))
     check("no deja temporales", leftovers() == 0, f"({leftovers()} archivos)")
+    check("el contenido subido es idéntico al original",
+          _stored_sha(task) == _sha(os.path.join(_TMP, "www", "datos_classic.bin")))
 
 
 async def test_retries(base_url: str) -> None:
@@ -283,8 +333,9 @@ def test_textos() -> None:
           bool(T.welcome_text(1, public=True, is_owner=False, cfg=CONFIG,
                               settings=RUNTIME_SETTINGS)))
     check("3 páginas de ayuda", all(bool(T.help_text(p)) for p in (1, 2, 3)))
+    from modules import keyboards as K
     check("menú principal con teclado",
-          len(T.main_menu_keyboard(is_owner_user=True).inline_keyboard) >= 3)
+          len(K.main_menu_keyboard(is_owner_user=True).inline_keyboard) >= 3)
 
 
 async def test_handlers_register() -> None:
@@ -315,6 +366,8 @@ async def main() -> int:
 
     storage.init(CONFIG)
     RUNTIME_SETTINGS.set_value("max_queue_total", 200)
+    import todus
+    todus.S3Client.store_dir = STORE
 
     served = os.path.join(_TMP, "www")
     os.makedirs(served, exist_ok=True)
@@ -335,6 +388,7 @@ async def main() -> int:
         test_textos()
         test_callbacks_parse()
         test_all_views()
+        test_texto_largo_seguro()
         await test_handlers_register()
         await test_stream_mode(base_url, size)
         await test_classic_mode(base_url, size)
@@ -358,98 +412,176 @@ async def main() -> int:
 
 
 # ----------------------------------------------------------------------
-# Renderizado de TODAS las vistas (detecta atributos mal escritos).
+# HTML válido para Telegram (etiquetas equilibradas y permitidas).
 # ----------------------------------------------------------------------
-def test_all_views() -> None:
-    print("\n▶ Renderizado de todas las vistas del bot")
-    from modules.handlers.cola import build_history_view, build_queue_view
-    from modules.handlers.settings import build_settings_view
+def html_ok(text: str) -> bool:
+    import re
+    stack = []
+    for tok in re.findall(r"<[^>]*>", text):
+        m = re.match(r"<(/?)([a-z]+)", tok)
+        if not m:
+            return False
+        closing, name = m.group(1) == "/", m.group(2)
+        if name not in {"b", "i", "code", "pre", "a", "u", "s"}:
+            return False
+        if closing:
+            if not stack or stack.pop() != name:
+                return False
+        else:
+            stack.append(name)
+    return not stack and not re.search(r"<[^>]*$", text)
 
-    def mk(user_id, name, status, **kw):
-        t = UploadTask(user_id=user_id, chat_id=user_id, filename=name,
-                       file_size=kw.pop("size", 50 * 1024 * 1024), source="url",
-                       url="https://x.com/f.bin", username=f"u{user_id}")
-        t.status = status
-        t.phase = kw.pop("phase", "")
-        t.parts_total = kw.pop("parts_total", 3)
-        t.parts_done = kw.pop("parts_done", 1)
-        t.chunk_size = 25 * 1024 * 1024
-        t.bytes_transferred = kw.pop("done", 25 * 1024 * 1024)
-        t.queue_position = kw.pop("pos", 2)
-        t.queue_length = 5
-        t.queue_eta = 120.0
-        t.error = kw.pop("error", None)
-        if status == TaskStatus.COMPLETED:
-            t.urls = ["https://s3.todus.cu/stream/users/tg_1/telegram/x/y.part001"]
-        return t
+
+def all_callbacks(markup) -> list:
+    return [b.callback_data for row in markup.inline_keyboard for b in row if b.callback_data]
+
+
+def mk_task(user_id, name, status, **kw):
+    t = UploadTask(user_id=user_id, chat_id=user_id, filename=name,
+                   file_size=kw.pop("size", 50 * 1024 * 1024), source="url",
+                   url="https://x.com/f.bin", username=f"u{user_id}")
+    t.status = status
+    t.phase = kw.pop("phase", "")
+    t.parts_total = kw.pop("parts_total", 3)
+    t.parts_done = kw.pop("parts_done", 1)
+    t.chunk_size = 25 * 1024 * 1024
+    t.bytes_transferred = kw.pop("done", 25 * 1024 * 1024)
+    t.queue_position = kw.pop("pos", 2)
+    t.queue_length = 5
+    t.queue_eta = 120.0
+    t.error = kw.pop("error", None)
+    t.speed = 1.5 * 1024 * 1024
+    if status == TaskStatus.COMPLETED:
+        n = kw.pop("n_urls", 1)
+        t.urls = [f"https://s3.todus.cu/stream/users/tg_1/telegram/x/y.part{i:03d}" for i in range(1, n + 1)]
+        t.keys = [u.split("/stream/")[1] for u in t.urls]
+        t.finished_at = t.created_at + 30
+    return t
+
+
+def test_all_views() -> None:
+    print("\n▶ Renderizado de TODAS las vistas del bot")
+    from modules import keyboards as K, views
 
     tasks = [
-        mk(1, "película.mkv", TaskStatus.QUEUED),
-        mk(1, "en_curso.mp4", TaskStatus.UPLOADING, phase="Subiendo"),
-        mk(1, "descargando.bin", TaskStatus.DOWNLOADING, phase="Descargando"),
-        mk(1, "listo.zip", TaskStatus.COMPLETED, parts_total=1, parts_done=1),
-        mk(1, "roto.rar", TaskStatus.FAILED, error="timeout de red", failed_part="parte 2/3"),
-        mk(1, "cancelado.mp4", TaskStatus.CANCELLED),
+        mk_task(1, "película.mkv", TaskStatus.QUEUED),
+        mk_task(1, "en_curso.mp4", TaskStatus.UPLOADING, phase="Subiendo"),
+        mk_task(1, "descargando.bin", TaskStatus.DOWNLOADING, phase="Descargando"),
+        mk_task(1, "listo.zip", TaskStatus.COMPLETED, parts_total=1, parts_done=1),
+        mk_task(1, "roto <x>.rar", TaskStatus.FAILED, error="timeout de red", failed_part="parte 2/3"),
+        mk_task(1, "cancelado.mp4", TaskStatus.CANCELLED),
+        mk_task(1, "otro.mkv", TaskStatus.QUEUED),
+        mk_task(1, "otro2.mkv", TaskStatus.COMPLETED),
     ]
-    for task in tasks:
-        task.speed = 1.5 * 1024 * 1024
+    for t in tasks:
+        QUEUE._tasks[t.task_id] = t
 
     try:
-        for page in (1, 2):
-            text, keyboard = build_queue_view(1, page, is_owner_user=True)
-            check(f"vista de cola página {page}", bool(text) and len(text) < 4096, str(len(text)))
-            check(f"teclado de cola página {page}",
-                  bool(keyboard.inline_keyboard))
-            gtext, gkey = build_queue_view(1, 1, is_owner_user=True, global_view=True)
-            check("vista global", bool(gtext) and len(gtext) < 4096)
+        for scope in ("m", "g"):
+            for page in (1, 2):
+                text, kb = views.queue_view(1, scope, page, is_owner_user=True)
+                check(f"cola {scope} pág {page}: HTML válido y corto",
+                      html_ok(text) and len(text) < 4096, str(len(text)))
+                check(f"cola {scope} pág {page}: un botón por tarea",
+                      sum(1 for c in all_callbacks(kb) if c.startswith("t:card:")) >= 1)
+        text, kb = views.queue_view(1, "g", 1, is_owner_user=False)
+        check("un usuario normal no puede ver la vista global",
+              "Cola global" not in text and all(c != "cola:g:1" for c in all_callbacks(kb)))
 
-        htext, hkey = build_history_view(1, 1)
-        check("vista de historial", bool(htext))
-        check("teclado de historial", bool(hkey.inline_keyboard))
-
-        stext, skey = build_settings_view(1, is_owner_user=True)
-        check("vista de ajustes", bool(stext) and "página" in stext)
-        check("teclado de ajustes", len(skey.inline_keyboard) >= 4)
-
-        # Botones de cada estado.
         for task in tasks:
-            kb = T.task_keyboard(task, is_owner_user=True)
-            datas = [b.callback_data for row in kb.inline_keyboard for b in row if b.callback_data]
-            check(f"teclado de tarea {task.status.value}", bool(datas), str(datas))
-        check("teclado principal", len(T.main_menu_keyboard(is_owner_user=False).inline_keyboard) >= 2)
-        check("teclado de admin", len(T.admin_keyboard(False).inline_keyboard) >= 2)
-        check("teclado de confirmación de cancelación", bool(T.cancel_all_keyboard().inline_keyboard))
-        check("teclado de confirmación de borrado",
-              "t:delyes:yes:abc" in T.delete_confirm_keyboard("abc").inline_keyboard[0][0].callback_data)
+            msg_text, msg_kb = views.task_message(task)
+            check(f"mensaje de tarea {task.status.value}: HTML válido", html_ok(msg_text), msg_text[:80])
+            datas = all_callbacks(msg_kb) if msg_kb else []
+            check(f"mensaje de tarea {task.status.value}: SIN botones de navegación",
+                  not any(d.startswith(("menu:", "cola:", "hist:")) for d in datas), str(datas))
+            ctext, ckb = views.card_view(task, "q1", 1, manage=True)
+            check(f"ficha {task.status.value}: HTML válido", html_ok(ctext))
+            check(f"ficha {task.status.value}: vuelve a la cola",
+                  "cola:m:1" in all_callbacks(ckb))
 
-        # Las filas del historial (con enlaces) se formatean bien.
-        rows = [{"task_id": "abc", "filename": "f.bin", "file_size": 123,
-                 "status": "completed", "urls": ["https://s3.todus.cu/stream/x"],
-                 "finished_at": __import__("time").time(), "created_at": __import__("time").time()}]
-        check("historial con enlaces", "https://s3.todus.cu" in T.history_text(rows, 1, 5))
+        # El mensaje de una tarea en curso solo ofrece cancelar.
+        _, kb = views.task_message(tasks[1])
+        check("tarea en curso: solo 🛑 Cancelar",
+              all_callbacks(kb) == [f"t:cancel:{tasks[1].task_id}:m"], str(all_callbacks(kb)))
+        # El resultado ofrece enlaces + borrar y NO "Menú".
+        _, kb = views.task_message(tasks[3])
+        check("resultado: enlaces + borrar",
+              [c.split(":")[1] for c in all_callbacks(kb)] == ["links", "del"], str(all_callbacks(kb)))
+
+        # Borrado de toDus: el mensaje resultante no ofrece nada más.
+        done = tasks[3]
+        done.deleted_from_s3, done.urls = True, []
+        mtext, mkb = views.task_message(done)
+        check("tras borrar: texto de borrado y sin botones", "Borrado" in mtext and mkb is None)
+
+        rtext, rkb = views.history_view(1, 1)
+        check("vista de historial", html_ok(rtext) and bool(rkb.inline_keyboard))
+        stext, skb = views.settings_view(1, is_owner_user=True)
+        check("vista de ajustes (owner)", "página" in stext and len(skb.inline_keyboard) >= 4)
+        stext, skb = views.settings_view(1, is_owner_user=False)
+        check("ajustes de solo lectura: sin botones de edición",
+              not any(c.startswith("set:cycle") for c in all_callbacks(skb)))
+        for name, view in [
+            ("admin", views.admin_view()), ("stats", views.stats_view()),
+            ("cuota", views.quota_view(1)), ("top", views.top_view(1, is_owner_user=False)),
+            ("ayuda 1", views.help_view(1)), ("ayuda 3", views.help_view(3)),
+            ("inicio", views.home_view(1, is_owner_user=True, admin_name="@admin")),
+        ]:
+            check(f"vista {name}: HTML válido y corto", html_ok(view[0]) and len(view[0]) < 4096)
+            check(f"vista {name}: callbacks ≤ 64 bytes",
+                  all(len(c.encode()) <= 64 for c in all_callbacks(view[1])))
+        check("el menú principal ya no tiene Stats/Sistema sueltos",
+              "menu:stats" not in all_callbacks(K.main_menu_keyboard(is_owner_user=True))
+              and "menu:admin" in all_callbacks(K.main_menu_keyboard(is_owner_user=True)))
+        check("un usuario normal no ve el botón de administración",
+              "menu:admin" not in all_callbacks(K.main_menu_keyboard(is_owner_user=False)))
+        # Confirmaciones.
+        ctext, ckb = views.delete_confirm_view(mk_task(1, "z.bin", TaskStatus.COMPLETED), "h2")
+        check("confirmar borrado: Sí / No (vuelve a la ficha)",
+              [c.split(":")[1] for c in all_callbacks(ckb)] == ["delok", "back"])
+        check("cancelar todas sin tareas devuelve None",
+              views.cancel_all_view(424242, "m", is_owner_user=False) is None)
     except Exception as exc:  # noqa: BLE001
+        import traceback; traceback.print_exc()
         check("renderizado sin errores", False, f"{type(exc).__name__}: {exc}")
+    finally:
+        for t in tasks:
+            QUEUE._tasks.pop(t.task_id, None)
+
+
+def test_texto_largo_seguro() -> None:
+    print("\n▶ Mensajes largos: HTML siempre cerrado")
+    task = mk_task(1, "enorme.mkv", TaskStatus.COMPLETED, n_urls=300, parts_total=300)
+    task.urls = [f"https://s3.todus.cu/stream/users/tg_1/telegram/20260101-000000-abcdef/enorme.part{i:03d}.mkv" for i in range(1, 301)]
+    final = T.final_text(task)
+    check("300 partes: el mensaje final cabe", len(final) <= 4096, str(len(final)))
+    check("300 partes: el HTML está bien cerrado", html_ok(final))
+    check("300 partes: avisa de que hay más en el .txt", "más" in final and ".txt" in final)
+    card = T.task_card_text(task)
+    check("ficha con 300 partes: HTML válido", html_ok(card) and len(card) <= 4096)
+    cortado = T.cut("<b>título</b>\n<pre>" + "\n".join("x" * 80 for _ in range(200)) + "</pre>")
+    check("cut() cierra un <pre> recortado", html_ok(cortado) and len(cortado) <= 4096)
 
 
 def test_callbacks_parse() -> None:
-    print("\n▶ Formatos de callback_data")
-    cases = {
-        "t:cancel:abc123": ("cancel", "abc123"),
-        "t:card:abc123": ("card", "abc123"),
-        "t:retry:abc123": ("retry", "abc123"),
-        "t:links:abc123": ("links", "abc123"),
-        "t:delyes:abc123": ("delyes", "abc123"),
-        "t:delyes:yes:abc123": ("delyes_yes", "abc123"),
+    print("\n▶ Formatos de callback_data y compatibilidad con botones antiguos")
+    from modules import keyboards as K
+
+    legacy = {
+        "cola:refresh": "cola:m:1", "cola:global": "cola:g:1", "cola:page:3": "cola:m:3",
+        "cola:cancelall": "cola:cx:m", "cola:cancelall:yes": "cola:cxy:m",
+        "hist:page:2": "hist:p:2", "hist:links:abc": "t:links:abc:h1",
+        "hist:delete:abc": "t:del:abc:h1", "hist:delete:yes:abc": "t:delok:abc:h1",
+        "t:cancel:abc": "t:cancel:abc:m", "t:card:abc": "t:card:abc:q1",
+        "t:retry:abc": "t:retry:abc:m", "t:links:abc": "t:links:abc:m",
+        "t:delyes:abc": "t:del:abc:m", "t:delyes:yes:abc": "t:delok:abc:m",
     }
-    for data, (kind, expected_id) in cases.items():
-        parts = data.split(":")
-        got_kind = parts[1]
-        got_id = parts[3] if (got_kind == "delyes" and len(parts) >= 4 and parts[2] == "yes") else parts[-1]
-        check(f"enrutado {data}", got_id == expected_id, got_id)
-    for data in ("menu:home", "menu:help:2", "cola:refresh", "cola:page:3",
-                 "cola:cancelall:yes", "hist:page:2", "set:cycle:chunk_size_mb",
-                 "set:page:2", "adm:pause", "noop"):
-        check(f"callback válido {data}", len(data.encode()) <= 64)
+    for old, new in legacy.items():
+        check(f"antiguo {old} → {new}", K.normalize_legacy(old) == new, K.normalize_legacy(old))
+    for current in ("t:cancel:abc:m", "t:card:abc:q2", "cola:g:2", "menu:help:2", "noop"):
+        check(f"actual {current} no se toca", K.normalize_legacy(current) == current)
+    check("contexto q3", K.parse_ctx("q3") == ("q", 3))
+    check("contexto basura", K.parse_ctx("zz") == ("m", 1))
 
 
 if __name__ == "__main__":

@@ -17,7 +17,8 @@ S3_CHUNK_SIZE_MB, ...) y se añaden nuevas para la cola escalable:
                     S3_BASE_URL, S3_RETRY_BASE_DELAY, S3_RETRY_MAX_DELAY
     Telegram        TELEGRAM_WORKERS, TG_CONCURRENT_DOWNLOADS
     Registro        LOG_CHANNEL_ID
-    Descargas       STREAM_MODE, MIN_FREE_GB, ALLOW_PRIVATE_URLS
+    Descargas       STREAM_MODE (auto|stream|classic; on/off también valen),
+                    MIN_FREE_GB, ALLOW_PRIVATE_URLS
     UI              PROGRESS_INTERVAL_SEC, LOG_LEVEL
 """
 
@@ -67,7 +68,11 @@ def _get_int(key: str, default: int = 0) -> int:
     if not raw:
         return default
     try:
-        return int(float(raw))
+        return int(raw)              # exacto para IDs largos (-100123...)
+    except ValueError:
+        pass
+    try:
+        return int(float(raw))       # tolera "50.0"
     except ValueError:
         raise ValueError(f"La variable {key}={raw!r} debe ser un número entero.")
 
@@ -87,6 +92,14 @@ def _get_bool(key: str, default: bool = False) -> bool:
     if not raw:
         return default
     return raw in ("1", "true", "yes", "y", "on", "si", "sí")
+
+
+# STREAM_MODE acepta los nombres antiguos (on/off) y los reales del ajuste.
+_STREAM_ALIASES = {
+    "auto": "auto", "": "auto",
+    "on": "stream", "stream": "stream",
+    "off": "classic", "classic": "classic",
+}
 
 
 # ----------------------------------------------------------------------
@@ -190,7 +203,7 @@ class AppConfig:
 
     # Comportamiento
     progress_interval: float = 3.0     # segundos entre ediciones del progreso
-    stream_mode: str = "auto"          # auto | on | off
+    stream_mode: str = "auto"          # auto | stream | classic (también on/off)
     min_free_gb: float = 2.0           # espacio libre mínimo en disco
     allow_private_urls: bool = False   # permitir URLs a IP privadas
     log_channel_id: Optional[int] = None   # canal donde registrar las subidas
@@ -200,8 +213,8 @@ class AppConfig:
         self.telegram.validate()
         self.s3.validate()
         self.queue.validate()
-        if self.stream_mode not in ("auto", "on", "off"):
-            raise ValueError("STREAM_MODE debe ser: auto | on | off")
+        if self.stream_mode not in ("auto", "stream", "classic"):
+            raise ValueError("STREAM_MODE debe ser: auto | stream | classic (o on | off)")
         if self.progress_interval < 1:
             raise ValueError("PROGRESS_INTERVAL_SEC debe ser >= 1 segundo.")
 
@@ -250,8 +263,7 @@ def load_config() -> AppConfig:
         owner_priority=_get_int("OWNER_PRIORITY", 5),
     )
 
-    owner_raw = _get_str("BOT_OWNER_ID")
-    owner_id = int(owner_raw) if owner_raw else None
+    owner_id = _get_int("BOT_OWNER_ID", 0) or None
 
     data_dir = _get_str("DATA_DIR", os.path.join(work_dir, "data")) or "data"
     cfg = AppConfig(
@@ -267,7 +279,7 @@ def load_config() -> AppConfig:
         state_file=_get_str("STATE_FILE", os.path.join(data_dir, "queue_state.json")),
         history_db=_get_str("HISTORY_DB", os.path.join(data_dir, "history.db")),
         progress_interval=_get_float("PROGRESS_INTERVAL_SEC", 3.0),
-        stream_mode=_get_str("STREAM_MODE", "auto").lower(),
+        stream_mode=_STREAM_ALIASES.get(_get_str("STREAM_MODE", "auto").lower(), "?"),
         min_free_gb=_get_float("MIN_FREE_GB", 2.0),
         allow_private_urls=_get_bool("ALLOW_PRIVATE_URLS", False),
         log_channel_id=_get_int("LOG_CHANNEL_ID", 0) or None,
