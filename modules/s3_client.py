@@ -89,8 +89,6 @@ class PartSpec:
     part_name: str       # nombre visible del trozo
     key: str             # key final en el bucket
     label: str           # "parte 3" (para mensajes de error)
-    source_path: Optional[str] = None  # archivo ya preparado, por ejemplo .7z.001
-    accounted_length: Optional[int] = None  # bytes del original para estadísticas
 
 
 def safe_filename(name: str) -> str:

@@ -356,19 +356,14 @@ ser **administrador** del canal.
 
 ## 🧩 Partes, enlaces y `.txt`
 
-Un archivo mayor que el trozo configurado se guarda como un archivo 7z sin
-compresión y se divide en volúmenes compatibles con ZArchiver:
-`pelicula.7z.001`, `pelicula.7z.002`… Cada volumen es un archivo independiente
-en toDus (el almacenamiento no admite subidas multiparte).
-
-Para reconstruirlo, descarga todos los volúmenes en la misma carpeta y abre
-`pelicula.7z.001` con ZArchiver. La aplicación detectará los demás volúmenes y
-extraerá el archivo original. No intentes abrir un volumen distinto del
-`.001`.
+Un archivo mayor que el trozo configurado se divide en
+`pelicula.part001.mkv`, `pelicula.part002.mkv`… Cada parte es un archivo
+independiente en toDus con su enlace (el almacenamiento no admite subidas
+multiparte).
 
 - El mensaje final lista los enlaces en un bloque `<pre>` (se copian con un toque).
-- El botón **📄 Enlaces .txt** manda un archivo con los enlaces en orden; abre
-  el volumen `.7z.001` con ZArchiver después de descargar todos.
+- El botón **📄 Enlaces .txt** manda un archivo con los enlaces en orden y las
+  instrucciones para unir las partes.
 - El botón **🗑 Borrar de S3** elimina las partes del almacenamiento (los enlaces
   dejan de funcionar) — con confirmación.
 

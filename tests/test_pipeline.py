@@ -167,26 +167,13 @@ def _sha(path: str) -> str:
 
 
 def _stored_sha(task: UploadTask) -> str:
-    """Extrae los volúmenes 7z guardados por el stub y calcula el SHA-256."""
+    """Une las partes guardadas por el stub, en orden, y devuelve su sha256."""
     import hashlib
-    archive_dir = tempfile.mkdtemp(prefix="7z-test-")
-    extract_dir = tempfile.mkdtemp(prefix="7z-extract-")
-    try:
-        for key in task.keys:
-            source = os.path.join(STORE, key.replace("/", "__"))
-            shutil.copyfile(source, os.path.join(archive_dir, os.path.basename(key)))
-        first = os.path.join(archive_dir, os.path.basename(task.keys[0]))
-        import subprocess
-        result = subprocess.run(
-            ["7z", "x", "-y", first, f"-o{extract_dir}"],
-            capture_output=True, text=True,
-        )
-        assert result.returncode == 0, result.stderr or result.stdout
-        extracted = os.path.join(extract_dir, task.filename)
-        return _sha(extracted)
-    finally:
-        shutil.rmtree(archive_dir, ignore_errors=True)
-        shutil.rmtree(extract_dir, ignore_errors=True)
+    h = hashlib.sha256()
+    for key in task.keys:
+        with open(os.path.join(STORE, key.replace("/", "__")), "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()
 
 
 def leftovers() -> int:
@@ -203,7 +190,7 @@ async def test_stream_mode(base_url: str, size: int) -> None:
     await run_single(task)
 
     check("termina completada", task.status == TaskStatus.COMPLETED, f"{task.status} {task.error}")
-    check("usa modo clásico para crear 7z", task.mode == "classic", task.mode)
+    check("usa modo stream", task.mode == "stream", task.mode)
     check("divide en 3 partes", task.parts_total == 3, str(task.parts_total))
     check("sube los 12 MB", task.bytes_transferred == size,
           f"{task.bytes_transferred} != {size}")
@@ -211,7 +198,7 @@ async def test_stream_mode(base_url: str, size: int) -> None:
     check("los enlaces son de toDus",
           all(u.startswith("https://s3.todus.cu/stream/") for u in task.urls))
     check("nombres de partes correctos",
-          all(".7z." in u for u in task.urls), str(task.urls[0]))
+          all(".part00" in u for u in task.urls), str(task.urls[0]))
     check("no deja temporales", leftovers() == 0, f"({leftovers()} archivos)")
     check("el contenido subido es idéntico al original (sin corrupción)",
           _stored_sha(task) == _sha(os.path.join(_TMP, "www", "datos_stream.bin")))

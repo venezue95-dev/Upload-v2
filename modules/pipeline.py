@@ -31,7 +31,6 @@ from config import CONFIG
 from . import keyboards as K
 from . import notifier
 from . import texts as T
-from .archive import create_7z_volumes
 from .downloader import (
     acheck_url,
     download_telegram_full,
@@ -47,8 +46,7 @@ from .downloader import (
 from .limiter import DynamicSemaphore
 from .queue import QUEUE, TaskCancelled, TaskStatus, UploadTask
 from .runtime_settings import RUNTIME_SETTINGS
-from .s3_client import (ChunkUploadError, PartSpec, S3Client, S3Error,
-                        get_client, plan_parts, pool, pretty_key)
+from .s3_client import ChunkUploadError, S3Client, S3Error, get_client, plan_parts, pool
 from .speedstats import SPEEDS
 
 log = logging.getLogger("s3_bot.pipeline")
@@ -127,10 +125,7 @@ async def _run_once(client, task: UploadTask) -> None:
         # de entonces. Si el owner lo cambió entretanto, hay que conservarlo o
         # el archivo reconstruido saldría corrupto.
         chunk_bytes = task.chunk_size
-    # Un contenedor 7z dividido necesita el archivo completo antes de
-    # generarse; por eso los archivos que superan un trozo usan classic.
-    mode = ("classic" if not size or size > chunk_bytes
-            else _choose_mode(settings.pipeline_mode, source, size, chunk_bytes))
+    mode = _choose_mode(settings.pipeline_mode, source, size, chunk_bytes)
     task.mode = mode
 
     # ---------------- 3. Espacio en disco ----------------
@@ -328,22 +323,12 @@ async def _run_classic(client, task: UploadTask, source: dict, chunk_bytes: int,
     # Aprendemos la velocidad real de bajada para futuras estimaciones.
     SPEEDS.note_download(size, time.monotonic() - download_started)
 
-    archive_dir = os.path.join(os.path.dirname(local_path), "7z", task.task_id)
-    if size > chunk_bytes:
-        base_name, parts = await asyncio.to_thread(
-            _prepare_7z_parts, task, local_path, archive_dir, chunk_bytes
-        )
-        task.s3_base = base_name
-        task.plan_parts(chunk_bytes, len(parts))
-        task.status = TaskStatus.UPLOADING
-        task.phase = "Subiendo volúmenes 7z"
-    else:
-        base_name, parts = plan_parts(task.user_id, task.filename, size, chunk_bytes,
-                                     folder=task.resume_folder)
-        task.s3_base = base_name
-        task.plan_parts(chunk_bytes, len(parts))
-        task.status = TaskStatus.UPLOADING
-        task.phase = "Subiendo"
+    base_name, parts = plan_parts(task.user_id, task.filename, size, chunk_bytes,
+                                 folder=task.resume_folder)
+    task.s3_base = base_name
+    task.plan_parts(chunk_bytes, len(parts))
+    task.status = TaskStatus.UPLOADING
+    task.phase = "Subiendo"
 
     log.info(
         "[%s] modo clásico | %.1f MB en %d partes",
@@ -353,12 +338,9 @@ async def _run_classic(client, task: UploadTask, source: dict, chunk_bytes: int,
     async def process(part):
         tmp = _tmp_path(task, part.number)
         try:
-            if size > chunk_bytes:
-                shutil.copyfile(part.source_path, tmp)
-            else:
-                await asyncio.to_thread(
-                    s3().slice_to_file, local_path, part.offset, part.length, tmp
-                )
+            await asyncio.to_thread(
+                s3().slice_to_file, local_path, part.offset, part.length, tmp
+            )
             await _upload_part(task, part, tmp)
         finally:
             _remove(tmp)
@@ -367,28 +349,6 @@ async def _run_classic(client, task: UploadTask, source: dict, chunk_bytes: int,
         await _run_parts(task, parts, process, per_task, skip=set(task.resumed_parts))
     finally:
         _remove(local_path)
-        shutil.rmtree(archive_dir, ignore_errors=True)
-
-
-def _prepare_7z_parts(task: UploadTask, local_path: str, archive_dir: str,
-                      chunk_bytes: int):
-    """Crea volúmenes 7z y los convierte en partes subibles."""
-    folder, base_key = pretty_key(task.user_id)
-    volumes = create_7z_volumes(local_path, archive_dir, task.filename, chunk_bytes)
-    parts = []
-    for number, (path, name, size) in enumerate(volumes, start=1):
-        parts.append(PartSpec(
-            number=number,
-            offset=0,
-            length=size,
-            part_name=name,
-            key=f"{base_key}/{name}",
-            label=f"volumen {number}/{len(volumes)}",
-            source_path=path,
-            accounted_length=min(size, max(0, os.path.getsize(local_path) -
-                                          (number - 1) * chunk_bytes)),
-        ))
-    return folder, parts
 
 
 # ----------------------------------------------------------------------
@@ -426,9 +386,8 @@ async def _upload_part(task: UploadTask, part, tmp_path: str) -> None:
         task.failed_part = part.label
         raise ChunkUploadError(part.label, 1, 1, str(exc)) from exc
 
-    accounted = part.accounted_length or part.length
-    task.part_finished(part.number, accounted, time.monotonic() - started)
-    QUEUE.note_bytes(accounted)
+    task.part_finished(part.number, part.length, time.monotonic() - started)
+    QUEUE.note_bytes(part.length)
     log.debug("[%s] %s subida (%.1f MB)", task.task_id, part.label, part.length / 1024 / 1024)
 
 
