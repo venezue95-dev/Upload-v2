@@ -323,7 +323,7 @@ Página 2 · **Subida y troceo**
 
 | Ajuste | Valores | Nota |
 |---|---|---|
-| 🧩 Trozo (chunk) | 10 / 25 / 50 / 100 / 200 / 400 / 800 MB | más pequeño = más partes y más enlaces |
+| 🧩 Trozo (chunk) | 10 / 25 / 50 / 100 / 200 / 400 / 800 / 1500 MB | más pequeño = más partes y más enlaces |
 | ⚡️ Partes en paralelo (por tarea) | 1 / 2 / 3 / 4 | por tarea |
 | 🏭 Subidas paralelas (todo el bot) | 2 / 4 / 6 / 8 / 12 | el freno global de toDus |
 | 🔁 Reintentos por parte | 3 / 5 / 10 | con backoff exponencial |
