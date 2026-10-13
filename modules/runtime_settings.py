@@ -27,7 +27,7 @@ log = logging.getLogger("s3_bot.settings")
 # ----------------------------------------------------------------------
 CYCLE_OPTIONS: Dict[str, List[Any]] = {
     "max_file_mb": [500, 800, 1000, 2000],
-    "chunk_size_mb": [10, 25, 50, 100, 200, 400, 800, 1500],
+    "chunk_size_mb": [10, 25, 50, 100, 200, 400, 800, 1500, 2000],
     "max_parallel": [1, 2, 3, 4],
     "global_chunk_workers": [2, 4, 6, 8, 12],
     "max_retries": [3, 5, 10],
