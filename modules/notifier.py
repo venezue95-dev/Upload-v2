@@ -296,24 +296,9 @@ async def _alert_owner(task: UploadTask) -> None:
 # Lista de enlaces en .txt
 # ----------------------------------------------------------------------
 def links_txt_content(task: UploadTask) -> str:
-    lines = [
-        "Enlaces de descarga directa — toDus S3",
-        "=" * 48,
-        f"Archivo : {task.filename}",
-        f"Tamaño  : {task.file_size} bytes",
-        f"Partes  : {task.parts_total}",
-        f"Fecha   : {time.strftime('%Y-%m-%d %H:%M:%S')}",
-        "",
-        "Descarga todas las partes en la misma carpeta y únelas en orden.",
-        "7-Zip: Add to archive → Split.  Linux/macOS: cat parte.* > archivo",
-        "",
-        "-" * 48,
-    ]
-    for i, url in enumerate(task.urls, start=1):
-        label = f"parte {i:03d}" if task.parts_total > 1 else "archivo"
-        lines.append(f"[{label}] {url}")
-    lines.append("-" * 48)
-    return "\n".join(lines)
+    # Lista limpia para pegarla directamente en un gestor de descargas:
+    # una URL por línea, sin títulos ni etiquetas.
+    return "\n".join(url.strip() for url in task.urls if url and url.strip()) + "\n"
 
 
 async def send_links_txt(client, chat_id: int, task: UploadTask) -> None:

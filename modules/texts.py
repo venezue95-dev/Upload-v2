@@ -429,7 +429,7 @@ def final_text(task: "UploadTask") -> str:
         block, shown = _urls_block(task.urls, room, numbered=False)
         body += ["", "<b>Enlace:</b>", pre(block)]
     else:
-        block, shown = _urls_block(task.urls, room, numbered=True)
+        block, shown = _urls_block(task.urls, room, numbered=False)
         body += ["", f"<b>Enlaces de las {n} partes:</b>", pre(block)]
         if shown < n:
             body.append(i(f"… y {n - shown} más (usa el botón .txt)"))

@@ -314,8 +314,10 @@ def test_textos() -> None:
     final = T.final_text(task)
     check("texto final con enlaces", "<pre>" in final and "https://" in final)
     check("texto final dentro del límite", len(final) < 4096, str(len(final)))
+    check("mensaje final sin numeración", "01. https://" not in final and "02. https://" not in final)
     txt = links_txt_content(task)
-    check("archivo .txt de enlaces", txt.count("https://") == 4, txt[:80])
+    txt_lines = txt.splitlines()
+    check("archivo .txt solo contiene enlaces", txt_lines == task.urls, repr(txt_lines))
 
     task.status = TaskStatus.FAILED
     task.error = "timeout <script>"
