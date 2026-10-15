@@ -13,9 +13,12 @@ from __future__ import annotations
 import logging
 import os
 import re
+import base64
+import tempfile
 from typing import Callable, Dict, Optional
 from urllib.parse import urlparse
 
+from config import CONFIG
 from .queue import TaskCancelled, UploadTask
 
 log = logging.getLogger("s3_bot.media")
@@ -95,9 +98,44 @@ def _ydl_options(media_format: str, quality: str, *, output_dir: str,
         }]
     if not download:
         opts["skip_download"] = True
+    cookiefile = _cookiefile_from_environment()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
+    user_agent = os.getenv("YTDLP_USER_AGENT", "").strip()
+    if user_agent:
+        opts["http_headers"] = {"User-Agent": user_agent}
     if hook:
         opts["progress_hooks"] = [hook]
     return opts
+
+
+def _cookiefile_from_environment() -> Optional[str]:
+    """Materializa cookies Base64 de Railway sin guardarlas en el repositorio."""
+    encoded = os.getenv("YTDLP_COOKIES_B64", "").strip()
+    if not encoded:
+        return None
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except Exception as exc:
+        raise RuntimeError("YTDLP_COOKIES_B64 no contiene Base64 válido") from exc
+    if not content.startswith((b"# HTTP Cookie File", b"# Netscape HTTP Cookie File")):
+        raise RuntimeError("YTDLP_COOKIES_B64 no contiene un cookies.txt Netscape válido")
+    directory = os.path.join(CONFIG.data_dir, "secrets")
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError:
+        directory = os.path.join(tempfile.gettempdir(), "todus-bot-secrets")
+        os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, "youtube-cookies.txt")
+    existing = None
+    if os.path.exists(path):
+        with open(path, "rb") as handle:
+            existing = handle.read()
+    if existing != content:
+        with open(path, "wb") as handle:
+            handle.write(content)
+        os.chmod(path, 0o600)
+    return path
 
 
 def _require_yt_dlp():
