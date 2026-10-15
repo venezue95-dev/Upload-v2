@@ -43,6 +43,11 @@ def is_blocked_media_url(url: str) -> bool:
     return any(host == marker or host.endswith("." + marker) for marker in BLOCKED_HOST_MARKERS)
 
 
+def is_facebook_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower().lstrip("www.")
+    return host == "facebook.com" or host.endswith(".facebook.com") or host == "fb.watch"
+
+
 def normalize_options(media_format: str = "mp4", quality: str = "720") -> tuple[str, str]:
     media_format = (media_format or "mp4").lower().strip()
     quality = (quality or "720").lower().strip().rstrip("p")
@@ -161,10 +166,7 @@ def probe_media(url: str, media_format: str = "mp4", quality: str = "720") -> Di
         info = ydl.extract_info(url, download=False)
         if not info:
             raise RuntimeError("no se pudieron obtener metadatos del enlace")
-        requested = info.get("requested_formats") or []
-        size = info.get("filesize") or info.get("filesize_approx") or 0
-        if requested:
-            size = sum((x.get("filesize") or x.get("filesize_approx") or 0) for x in requested)
+        size = _estimate_selected_size(info, media_format, quality)
         title = info.get("title") or info.get("id") or "descarga"
         ext = media_format
         return {
@@ -173,6 +175,39 @@ def probe_media(url: str, media_format: str = "mp4", quality: str = "720") -> Di
             "duration": int(info.get("duration") or 0),
             "extractor": info.get("extractor_key") or info.get("extractor") or "media",
         }
+
+
+def _format_size(fmt: dict) -> int:
+    return int(fmt.get("filesize") or fmt.get("filesize_approx") or 0)
+
+
+def _estimate_selected_size(info: dict, media_format: str, quality: str) -> int:
+    """Estima el tamaño del formato elegido, no el tamaño genérico del vídeo."""
+    requested = info.get("requested_formats") or []
+    if requested:
+        total = sum(_format_size(fmt) for fmt in requested)
+        if total:
+            return total
+    formats = [fmt for fmt in (info.get("formats") or []) if _format_size(fmt)]
+    if not formats:
+        return int(info.get("filesize") or info.get("filesize_approx") or 0)
+    audio = [f for f in formats if f.get("vcodec") == "none" and f.get("acodec") not in (None, "none")]
+    if media_format in {"mp3", "m4a", "opus", "wav"}:
+        if media_format == "m4a":
+            preferred = [f for f in audio if f.get("ext") == "m4a"] or audio
+        else:
+            preferred = audio
+        return _format_size(max(preferred or formats, key=lambda f: f.get("abr") or f.get("tbr") or 0))
+    limit = None if quality == "max" else int(quality)
+    video = [f for f in formats if f.get("vcodec") not in (None, "none")]
+    if limit:
+        under = [f for f in video if int(f.get("height") or 0) <= limit]
+        video = under or video
+    video_best = max(video or formats, key=lambda f: (int(f.get("height") or 0), f.get("tbr") or 0))
+    if video_best.get("acodec") not in (None, "none"):
+        return _format_size(video_best)
+    audio_best = max(audio, key=lambda f: f.get("abr") or f.get("tbr") or 0) if audio else None
+    return _format_size(video_best) + (_format_size(audio_best) if audio_best else 0)
 
 
 def download_media(url: str, dest_dir: str, task: UploadTask,

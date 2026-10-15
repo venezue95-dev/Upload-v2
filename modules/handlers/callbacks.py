@@ -249,8 +249,8 @@ async def _task(ctx: Ctx, args: list) -> None:
         if task.is_final:
             await ctx.answer("ℹ️ Esa tarea ya terminó.", alert=True)
             return
-        QUEUE.cancel(task_id)
-        await ctx.answer("🛑 Cancelando…")
+        cancelled = QUEUE.cancel(task_id)
+        await ctx.answer("🛑 Cancelando…" if cancelled else "ℹ️ La tarea ya terminó.", alert=not cancelled)
         if kind != "m":
             await asyncio.sleep(0.4)
             await refresh()

@@ -24,7 +24,7 @@ from pyrogram.types import Message
 
 from .. import texts as T
 from .. import keyboards as K
-from ..media_downloader import is_blocked_media_url, is_media_url, normalize_options
+from ..media_downloader import is_blocked_media_url, is_facebook_url, is_media_url, normalize_options
 from .common import AUTHORIZED, check_limits, enqueue, reply
 
 log = logging.getLogger("s3_bot.media_handler")
@@ -40,7 +40,7 @@ async def offer_media_options(message: Message, url: str) -> None:
     await reply(
         message,
         "📥 <b>Enlace multimedia detectado</b>\n\n"
-        "Elige el formato de descarga. Para vídeo podrás elegir la calidad después.",
+        "Elige el formato de descarga. En Facebook podrás elegir la calidad del vídeo.",
         K.media_format_keyboard(token),
     )
 
@@ -64,7 +64,7 @@ async def handle_callback(ctx, args: list[str]) -> None:
         await ctx.answer("Este panel expiró. Envía el enlace nuevamente.", alert=True)
         return
     _, message, url, _ = item
-    if action == "format" and value == "mp4":
+    if action == "format" and value == "mp4" and is_facebook_url(url):
         await ctx.answer("Elige la calidad de vídeo")
         await ctx.show((
             "🎬 <b>Elige la calidad de vídeo</b>\n\n"
@@ -72,15 +72,19 @@ async def handle_callback(ctx, args: list[str]) -> None:
             K.media_quality_keyboard(token),
         ))
         return
-    if action == "format" and value not in {"mp3", "m4a", "opus"}:
+    if action == "format" and value == "mp4":
+        media_format, quality = "mp4", "720"
+    elif action == "format" and value in {"mp3", "m4a", "opus"}:
+        media_format, quality = value, "720"
+    elif action == "format":
         await ctx.answer("Formato no disponible.", alert=True)
         return
-    if action == "quality":
+    elif action == "quality":
         media_format = "mp4"
         quality = value
     else:
-        media_format = value
-        quality = "720"
+        await ctx.answer("Opción no disponible.", alert=True)
+        return
     try:
         media_format, quality = normalize_options(media_format, quality)
     except ValueError:
