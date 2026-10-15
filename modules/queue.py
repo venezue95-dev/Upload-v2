@@ -1027,6 +1027,8 @@ class QueueManager:
         # arrancar, así que ni se anota en el historial ni se avisa al usuario.
         shutdown_pause = task.interrupted and task.cancel_reason == "apagado del bot"
         if not shutdown_pause:
+            from . import storage
+            storage.release_quota(task.task_id)
             self._record_history(task)
         self._refresh_positions()
         self._mark_dirty()
@@ -1054,6 +1056,8 @@ class QueueManager:
             self._waiting.remove(task)
             self._user_waiting[task.user_id] = max(0, self._user_waiting.get(task.user_id, 1) - 1)
         task.mark_finished(status)
+        from . import storage
+        storage.release_quota(task.task_id)
         if status == TaskStatus.CANCELLED:
             self.cancelled_count += 1
         self._record_history(task)

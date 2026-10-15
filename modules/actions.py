@@ -142,8 +142,25 @@ async def retry_task(client, task: UploadTask) -> Tuple[bool, str]:
         clone.bytes_transferred = sum(clone.expected_part_length(n) for n in clone.resumed_parts)
         resumed = len(done)
 
+    allowed, used, limit = storage.reserve_quota(
+        clone.user_id,
+        clone.task_id,
+        clone.file_size,
+        owner=(CONFIG.owner_id is not None and clone.user_id == CONFIG.owner_id),
+    )
+    if not allowed:
+        from .progress import human_size
+        return False, (
+            "📊 <b>Cuota diaria superada</b>\n\n"
+            f"• Usado o reservado: {T.b(human_size(used))}\n"
+            f"• Límite diario: {T.b(human_size(limit))}\n"
+            f"• Este reintento: {T.b(human_size(clone.file_size))}\n\n"
+            f"{T.i('Espera a que termine otra tarea o libere su reserva.')}"
+        )
+
     ok, reason = QUEUE.submit(clone)
     if not ok:
+        storage.release_quota(clone.task_id)
         return False, reason
 
     task.retried_as = clone.task_id

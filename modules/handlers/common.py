@@ -158,8 +158,9 @@ async def edit(message: Message, text: str, keyboard: Optional[InlineKeyboardMar
 async def check_limits(user_id: int, message: Message,
                        incoming_bytes: int = 0) -> bool:
     """
-    Puertas de entrada antes de crear una tarea: mantenimiento, baneo,
-    cuota diaria y anti-spam. (Los cupos de cola los aplica ``QUEUE.submit``.)
+    Puertas de entrada antes de crear una tarea: mantenimiento, baneo y
+    anti-spam. La reserva atómica de cuota y los cupos de cola se aplican al
+    crear/admitir la tarea.
     True = puede continuar.
     """
     owner = can_manage(user_id)
@@ -179,23 +180,6 @@ async def check_limits(user_id: int, message: Message,
             "Contacta con el administrador del bot si crees que es un error.",
         )
         return False
-
-    quota_mb = int(RUNTIME_SETTINGS.get("daily_quota_mb", 0) or 0)
-    if not owner and quota_mb > 0 and incoming_bytes > 0:
-        used = storage.bytes_today(user_id)
-        limit = quota_mb * 1024 * 1024
-        if used + incoming_bytes > limit:
-            from ..progress import human_size
-
-            await reply(
-                message,
-                "📊 <b>Cuota diaria superada</b>\n\n"
-                f"• Usado hoy: {T.b(human_size(used))}\n"
-                f"• Límite diario: {T.b(human_size(limit))}\n"
-                f"• Este archivo: {T.b(human_size(incoming_bytes))}\n\n"
-                f"{T.i('La cuota se reinicia cada 24 horas.')}",
-            )
-            return False
 
     remaining = None if owner else QUEUE.check_rate_limit(user_id)
     if remaining is not None:
@@ -239,8 +223,22 @@ async def enqueue(
         max_attempts=1 + int(CONFIG.queue.auto_retries),
     )
 
+    allowed, used, limit = storage.reserve_quota(
+        user.id, task.task_id, file_size, owner=is_owner(user.id)
+    )
+    if not allowed:
+        from ..progress import human_size
+        return None, (
+            "📊 <b>Cuota diaria superada</b>\n\n"
+            f"• Usado o reservado: {T.b(human_size(used))}\n"
+            f"• Límite diario: {T.b(human_size(limit))}\n"
+            f"• Este archivo: {T.b(human_size(file_size))}\n\n"
+            f"{T.i('La cuota se libera al completar 24 horas.')}"
+        )
+
     ok, reason = QUEUE.submit(task)
     if not ok:
+        storage.release_quota(task.task_id)
         return None, reason
 
     msg = await reply(

@@ -162,6 +162,25 @@ async def main() -> int:
           hoy == 10 * 1024 * 1024, str(hoy))
     check("la cuota es por usuario", storage.bytes_today(777) == 0)
 
+    quota_original = RUNTIME_SETTINGS.get("daily_quota_mb")
+    RUNTIME_SETTINGS.set_value("daily_quota_mb", 100)
+    first_ok, first_used, _ = storage.reserve_quota(
+        9001, "pending-a", 60 * 1024 * 1024
+    )
+    second_ok, second_used, _ = storage.reserve_quota(
+        9001, "pending-b", 50 * 1024 * 1024
+    )
+    check("la primera tarea reserva su cuota", first_ok and first_used == 60 * 1024 * 1024)
+    check("la segunda tarea no puede esquivar la cuota reservada", not second_ok,
+          str(second_used))
+    check("las reservas aparecen en bytes_today",
+          storage.bytes_today(9001) == 60 * 1024 * 1024)
+    storage.release_quota("pending-a")
+    third_ok, _, _ = storage.reserve_quota(9001, "pending-c", 50 * 1024 * 1024)
+    check("la cuota se libera al terminar/cancelar", third_ok)
+    storage.release_quota("pending-c")
+    RUNTIME_SETTINGS.set_value("daily_quota_mb", quota_original)
+
     stats = storage.global_stats()
     check("las estadísticas globales cuentan tareas completadas",
           stats.get("completed", 0) >= 2, str(stats)[:110])

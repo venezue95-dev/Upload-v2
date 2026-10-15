@@ -82,6 +82,7 @@ def register_handlers(app: Client) -> None:
 async def resume_pending_tasks(client: Client) -> None:
     """Reencola lo que quedó a medias en el apagado anterior."""
     tasks = QUEUE.load_state()
+    storage.reconcile_quota_reservations([task.task_id for task in tasks])
     if not tasks:
         return
     resumed = 0

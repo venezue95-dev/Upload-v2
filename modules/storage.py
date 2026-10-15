@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS users (
     bytes       INTEGER DEFAULT 0,
     parts       INTEGER DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS quota_reservations (
+    task_id      TEXT PRIMARY KEY,
+    user_id      INTEGER NOT NULL,
+    file_size    INTEGER NOT NULL,
+    reserved_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_quota_res_user ON quota_reservations(user_id);
 """
 
 
@@ -413,21 +421,89 @@ def avg_speeds() -> Tuple[float, float]:
 # Cuota diaria por usuario.
 # ----------------------------------------------------------------------
 def bytes_today(user_id: int) -> int:
-    """Bytes subidos por el usuario en las últimas 24 h (para la cuota)."""
+    """Bytes completados más bytes reservados en las últimas 24 h."""
     try:
         conn = _conn()
         cutoff = time.time() - 86400
         with _LOCK:
             row = conn.execute(
                 """
-                SELECT COALESCE(SUM(file_size),0) AS total FROM tasks
-                WHERE user_id=? AND status='completed' AND finished_at>=?
+                SELECT
+                    (SELECT COALESCE(SUM(file_size),0) FROM tasks
+                     WHERE user_id=? AND status='completed' AND finished_at>=?)
+                    +
+                    (SELECT COALESCE(SUM(file_size),0) FROM quota_reservations
+                     WHERE user_id=?) AS total
                 """,
-                (user_id, cutoff),
+                (user_id, cutoff, user_id),
             ).fetchone()
         return int(row["total"] or 0)
     except Exception:  # pragma: no cover
         return 0
+
+
+def reserve_quota(user_id: int, task_id: str, file_size: int, *, owner: bool = False) -> Tuple[bool, int, int]:
+    """Reserva cuota de forma atómica para una tarea admitida en la cola.
+
+    Devuelve (permitida, usado_incluidas_reservas, límite_bytes). El owner y
+    la cuota 0 no reservan nada. La fila persiste para sobrevivir reinicios.
+    """
+    size = max(0, int(file_size or 0))
+    from .runtime_settings import RUNTIME_SETTINGS
+
+    limit_mb = int(RUNTIME_SETTINGS.get("daily_quota_mb", 0) or 0)
+    limit = limit_mb * 1024 * 1024
+    if owner or limit <= 0 or size <= 0:
+        return True, bytes_today(user_id), limit
+    conn = _conn()
+    cutoff = time.time() - 86400
+    with _LOCK:
+        row = conn.execute(
+            """
+            SELECT
+                (SELECT COALESCE(SUM(file_size),0) FROM tasks
+                 WHERE user_id=? AND status='completed' AND finished_at>=?)
+                +
+                (SELECT COALESCE(SUM(file_size),0) FROM quota_reservations
+                 WHERE user_id=?) AS total
+            """,
+            (user_id, cutoff, user_id),
+        ).fetchone()
+        used = int(row["total"] or 0)
+        if used + size > limit:
+            return False, used, limit
+        conn.execute(
+            "INSERT OR REPLACE INTO quota_reservations(task_id,user_id,file_size,reserved_at) VALUES (?,?,?,?)",
+            (task_id, user_id, size, time.time()),
+        )
+        conn.commit()
+        return True, used + size, limit
+
+
+def release_quota(task_id: str) -> None:
+    """Libera la reserva al terminar, fallar o cancelar una tarea."""
+    try:
+        conn = _conn()
+        with _LOCK:
+            conn.execute("DELETE FROM quota_reservations WHERE task_id=?", (task_id,))
+            conn.commit()
+    except Exception as exc:  # pragma: no cover
+        log.warning("release_quota falló: %s", exc)
+
+
+def reconcile_quota_reservations(active_task_ids: List[str]) -> None:
+    """Elimina reservas huérfanas después de cargar el estado de la cola."""
+    try:
+        conn = _conn()
+        with _LOCK:
+            if active_task_ids:
+                marks = ",".join("?" for _ in active_task_ids)
+                conn.execute(f"DELETE FROM quota_reservations WHERE task_id NOT IN ({marks})", active_task_ids)
+            else:
+                conn.execute("DELETE FROM quota_reservations")
+            conn.commit()
+    except Exception as exc:  # pragma: no cover
+        log.warning("reconcile_quota_reservations falló: %s", exc)
 
 
 # ----------------------------------------------------------------------
