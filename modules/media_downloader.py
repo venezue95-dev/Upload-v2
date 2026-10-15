@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import base64
 import tempfile
 from typing import Callable, Dict, Optional
 from urllib.parse import urlparse
@@ -110,16 +109,13 @@ def _ydl_options(media_format: str, quality: str, *, output_dir: str,
 
 
 def _cookiefile_from_environment() -> Optional[str]:
-    """Materializa cookies Base64 de Railway sin guardarlas en el repositorio."""
-    encoded = os.getenv("YTDLP_COOKIES_B64", "").strip()
-    if not encoded:
+    """Materializa cookies Netscape multilinea de YTDLP_COOKIES."""
+    content = os.getenv("YTDLP_COOKIES", "")
+    if not content.strip():
         return None
-    try:
-        content = base64.b64decode(encoded, validate=True)
-    except Exception as exc:
-        raise RuntimeError("YTDLP_COOKIES_B64 no contiene Base64 válido") from exc
-    if not content.startswith((b"# HTTP Cookie File", b"# Netscape HTTP Cookie File")):
-        raise RuntimeError("YTDLP_COOKIES_B64 no contiene un cookies.txt Netscape válido")
+    content_bytes = content.replace("\r\n", "\n").encode("utf-8")
+    if not content_bytes.startswith((b"# HTTP Cookie File", b"# Netscape HTTP Cookie File")):
+        raise RuntimeError("YTDLP_COOKIES no contiene un cookies.txt Netscape válido")
     directory = os.path.join(CONFIG.data_dir, "secrets")
     try:
         os.makedirs(directory, exist_ok=True)
@@ -131,9 +127,9 @@ def _cookiefile_from_environment() -> Optional[str]:
     if os.path.exists(path):
         with open(path, "rb") as handle:
             existing = handle.read()
-    if existing != content:
+    if existing != content_bytes:
         with open(path, "wb") as handle:
-            handle.write(content)
+            handle.write(content_bytes)
         os.chmod(path, 0o600)
     return path
 
