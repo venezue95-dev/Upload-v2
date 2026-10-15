@@ -23,11 +23,12 @@ from .queue import TaskCancelled, UploadTask
 log = logging.getLogger("s3_bot.media")
 
 SUPPORTED_HOST_MARKERS = (
-    "youtube.com", "youtu.be", "instagram.com", "tiktok.com", "vm.tiktok.com",
+    "instagram.com", "tiktok.com", "vm.tiktok.com",
     "facebook.com", "fb.watch", "twitter.com", "x.com", "vimeo.com",
     "twitch.tv", "reddit.com", "soundcloud.com", "dailymotion.com",
     "bilibili.com", "rumble.com", "pinterest.com", "streamable.com",
 )
+BLOCKED_HOST_MARKERS = ("youtube.com", "youtu.be")
 FORMATS = {"mp4", "mp3", "m4a", "opus", "wav"}
 QUALITIES = {"144", "240", "360", "480", "720", "1080", "1440", "2160", "max"}
 
@@ -35,6 +36,11 @@ QUALITIES = {"144", "240", "360", "480", "720", "1080", "1440", "2160", "max"}
 def is_media_url(url: str) -> bool:
     host = (urlparse(url).hostname or "").lower().lstrip("www.")
     return any(host == marker or host.endswith("." + marker) for marker in SUPPORTED_HOST_MARKERS)
+
+
+def is_blocked_media_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower().lstrip("www.")
+    return any(host == marker or host.endswith("." + marker) for marker in BLOCKED_HOST_MARKERS)
 
 
 def normalize_options(media_format: str = "mp4", quality: str = "720") -> tuple[str, str]:

@@ -20,7 +20,7 @@ from pyrogram.types import Message
 
 from .. import texts as T
 from ..downloader import acheck_url, probe_url, url_to_filename
-from ..media_downloader import is_media_url
+from ..media_downloader import is_blocked_media_url, is_media_url
 from ..queue import QUEUE
 from ..runtime_settings import RUNTIME_SETTINGS
 from .common import AUTHORIZED, check_limits, enqueue, reply, spawn
@@ -71,6 +71,12 @@ async def _enqueue_single(client: Client, message: Message, url: str) -> None:
         await reply(message, f"<b>⛔️ Enlace no válido</b>\n\n{T.esc(why)}")
         return
 
+    if is_blocked_media_url(url):
+        await reply(message, "<b>ℹ️ YouTube no está disponible</b>\n\n"
+                            "Las descargas de YouTube fueron desactivadas temporalmente. "
+                            "Puedes utilizar Instagram, TikTok, Facebook y las demás plataformas habilitadas.")
+        return
+
     duplicate = QUEUE.find_duplicate_url(user_id, url)
     if duplicate:
         await reply(
@@ -93,6 +99,14 @@ async def _enqueue_single(client: Client, message: Message, url: str) -> None:
             return
         QUEUE.touch_rate_limit(user_id)
         log.info("[%s] descarga multimedia automática por %s | %s", task.task_id, user_id, url)
+        await reply(
+            message,
+            "📥 <b>Descarga multimedia en cola</b>\n\n"
+            "Formato predeterminado: <code>MP4 · 720p</code>.\n"
+            "Para elegir otra opción usa, por ejemplo:\n"
+            f"<code>/descargar {T.esc(url)} mp3</code>\n"
+            f"<code>/descargar {T.esc(url)} mp4 1080</code>",
+        )
         return
 
     # Consultamos metadatos (tamaño/nombre) para avisar de límites cuanto antes.
@@ -133,6 +147,8 @@ async def _enqueue_many(client: Client, message: Message, urls: List[str]) -> No
     for url, (ok, why) in zip(urls, checks):
         if not ok:
             rejected.append(f"⛔️ {T.code(T.shorten(url, 44))} — {T.i(T.shorten(why, 40))}")
+        elif is_blocked_media_url(url):
+            rejected.append(f"ℹ️ {T.code(T.shorten(url, 44))} — {T.i('YouTube está desactivado')}")
         elif QUEUE.find_duplicate_url(user_id, url):
             rejected.append(f"♻️ {T.code(T.shorten(url, 44))} — {T.i('ya en cola')}")
         else:
