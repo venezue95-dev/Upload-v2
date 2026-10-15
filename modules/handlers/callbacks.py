@@ -149,6 +149,9 @@ def _int(value: Optional[str], default: int = 1) -> int:
 async def _menu(ctx: Ctx, args: list) -> None:
     action = args[0] if args else "home"
 
+    if action in {"home", "help", "sites", "chunk", "cola", "hist", "quota", "top"}:
+        await ctx.answer()
+
     if action == "home":
         name = await views.owner_display_name(ctx.client)
         await ctx.show(views.home_view(ctx.user_id, is_owner_user=ctx.is_owner, admin_name=name))
@@ -217,6 +220,7 @@ async def _cola(ctx: Ctx, args: list) -> None:
     if sub in ("m", "g"):
         if sub == "g" and not await _owner_only(ctx):
             return
+        await ctx.answer()
         await ctx.show(views.queue_view(ctx.user_id, sub, _int(args[1] if len(args) > 1 else None),
                                         is_owner_user=ctx.is_owner))
         return
@@ -243,6 +247,7 @@ async def _cola(ctx: Ctx, args: list) -> None:
 # ----------------------------------------------------------------------
 async def _history(ctx: Ctx, args: list) -> None:
     if args and args[0] == "p":
+        await ctx.answer()
         await ctx.show(views.history_view(ctx.user_id, _int(args[1] if len(args) > 1 else None)))
 
 
@@ -269,9 +274,11 @@ async def _task(ctx: Ctx, args: list) -> None:
             await ctx.show(views.card_view(task, ctx_code, ctx.user_id, manage=ctx.manage))
 
     if action == "card":
+        await ctx.answer()
         await refresh()
 
     elif action == "back":
+        await ctx.answer()
         await refresh()
 
     elif action == "cancel":
@@ -305,6 +312,7 @@ async def _task(ctx: Ctx, args: list) -> None:
         if not task.has_links or not task.keys:
             await ctx.answer("ℹ️ No hay nada que borrar.", alert=True)
             return
+        await ctx.answer()
         await ctx.show(views.delete_confirm_view(task, ctx_code))
 
     elif action == "delok":
