@@ -14,4 +14,4 @@ requests>=2.25
 python-dotenv==1.0.1
 
 # Descargas multimedia explícitas (/descargar). FFmpeg se instala en Docker.
-yt-dlp[default]>=2025.9.26
+yt-dlp[default,curl-cffi]>=2025.9.26

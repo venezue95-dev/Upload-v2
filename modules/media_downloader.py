@@ -59,6 +59,7 @@ def normalize_options(media_format: str = "mp4", quality: str = "720") -> tuple[
 
 
 def _ydl_options(media_format: str, quality: str, *, output_dir: str,
+                 url: Optional[str] = None,
                  download: bool, hook: Optional[Callable[[dict], None]] = None) -> dict:
     media_format, quality = normalize_options(media_format, quality)
     height = ""
@@ -66,7 +67,14 @@ def _ydl_options(media_format: str, quality: str, *, output_dir: str,
         height = f"[height<={quality}]"
 
     if media_format == "mp4":
-        selector = f"bestvideo{height}+bestaudio/best{height}/best"
+        if url and is_facebook_url(url):
+            # Facebook suele devolver únicamente los identificadores sd/hd y no
+            # informa height; el selector por altura no puede distinguirlos.
+            selector = ("sd/best[height<=480]/best" if quality != "max" and int(quality) <= 480
+                        else "hd/best[height<=%s]/best" % quality if quality != "max"
+                        else "hd/best")
+        else:
+            selector = f"bestvideo{height}+bestaudio/best{height}/best"
     elif media_format == "m4a":
         selector = "bestaudio[ext=m4a]/bestaudio/best"
     else:
@@ -160,7 +168,7 @@ def probe_media(url: str, media_format: str = "mp4", quality: str = "720") -> Di
     if not is_media_url(url):
         raise ValueError("el dominio no está habilitado para descargas multimedia")
     yt_dlp = _require_yt_dlp()
-    opts = _ydl_options(media_format, quality, output_dir=".", download=False)
+    opts = _ydl_options(media_format, quality, output_dir=".", url=url, download=False)
     opts["logger"] = log
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -181,14 +189,24 @@ def _format_size(fmt: dict) -> int:
     return int(fmt.get("filesize") or fmt.get("filesize_approx") or 0)
 
 
+def _format_size_or_bitrate(fmt: dict, duration: int = 0) -> int:
+    size = _format_size(fmt)
+    if size:
+        return size
+    bitrate = fmt.get("tbr") or fmt.get("abr") or 0
+    return int(float(bitrate) * 1000 / 8 * duration) if bitrate and duration else 0
+
+
 def _estimate_selected_size(info: dict, media_format: str, quality: str) -> int:
     """Estima el tamaño del formato elegido, no el tamaño genérico del vídeo."""
+    duration = int(info.get("duration") or 0)
     requested = info.get("requested_formats") or []
     if requested:
-        total = sum(_format_size(fmt) for fmt in requested)
+        total = sum(_format_size_or_bitrate(fmt, duration) for fmt in requested)
         if total:
             return total
-    formats = [fmt for fmt in (info.get("formats") or []) if _format_size(fmt)]
+    formats = [fmt for fmt in (info.get("formats") or [])
+               if _format_size_or_bitrate(fmt, duration)]
     if not formats:
         return int(info.get("filesize") or info.get("filesize_approx") or 0)
     audio = [f for f in formats if f.get("vcodec") == "none" and f.get("acodec") not in (None, "none")]
@@ -197,7 +215,9 @@ def _estimate_selected_size(info: dict, media_format: str, quality: str) -> int:
             preferred = [f for f in audio if f.get("ext") == "m4a"] or audio
         else:
             preferred = audio
-        return _format_size(max(preferred or formats, key=lambda f: f.get("abr") or f.get("tbr") or 0))
+        return _format_size_or_bitrate(
+            max(preferred or formats, key=lambda f: f.get("abr") or f.get("tbr") or 0), duration
+        )
     limit = None if quality == "max" else int(quality)
     video = [f for f in formats if f.get("vcodec") not in (None, "none")]
     if limit:
@@ -205,9 +225,11 @@ def _estimate_selected_size(info: dict, media_format: str, quality: str) -> int:
         video = under or video
     video_best = max(video or formats, key=lambda f: (int(f.get("height") or 0), f.get("tbr") or 0))
     if video_best.get("acodec") not in (None, "none"):
-        return _format_size(video_best)
+        return _format_size_or_bitrate(video_best, duration)
     audio_best = max(audio, key=lambda f: f.get("abr") or f.get("tbr") or 0) if audio else None
-    return _format_size(video_best) + (_format_size(audio_best) if audio_best else 0)
+    return _format_size_or_bitrate(video_best, duration) + (
+        _format_size_or_bitrate(audio_best, duration) if audio_best else 0
+    )
 
 
 def download_media(url: str, dest_dir: str, task: UploadTask,
@@ -225,7 +247,7 @@ def download_media(url: str, dest_dir: str, task: UploadTask,
         if status == "downloading":
             total = data.get("total_bytes") or data.get("total_bytes_estimate") or task.file_size
             downloaded = int(data.get("downloaded_bytes") or 0)
-            if total and not task.file_size:
+            if total and not task.file_size and media_format == "mp4":
                 task.file_size = int(total)
             task.set_fetched(downloaded)
         elif status == "finished":
@@ -233,7 +255,8 @@ def download_media(url: str, dest_dir: str, task: UploadTask,
             if total:
                 task.set_fetched(total)
 
-    opts = _ydl_options(media_format, quality, output_dir=dest_dir, download=True, hook=hook)
+    opts = _ydl_options(media_format, quality, output_dir=dest_dir, url=url,
+                         download=True, hook=hook)
     opts["logger"] = log
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([url])
@@ -248,7 +271,9 @@ def download_media(url: str, dest_dir: str, task: UploadTask,
     path = max(candidates, key=os.path.getmtime)
     if os.path.getsize(path) <= 0:
         raise RuntimeError("yt-dlp generó un archivo vacío")
-    task.set_fetched(os.path.getsize(path))
+    final_size = os.path.getsize(path)
+    task.file_size = final_size
+    task.set_fetched(final_size)
     return path
 
 
