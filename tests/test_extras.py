@@ -44,6 +44,7 @@ from modules.queue import TaskStatus, UploadTask           # noqa: E402
 from modules import runtime_settings as RS                    # noqa: E402
 from modules.runtime_settings import RUNTIME_SETTINGS      # noqa: E402
 from modules.speedstats import SPEEDS, SpeedStats          # noqa: E402
+from modules import filehost as FH                         # noqa: E402
 
 PASSED, FAILED = [], []
 
@@ -434,8 +435,11 @@ async def main() -> int:
     check("MediaFire extrae el botón de descarga", mediafire.endswith("/file.bin"), mediafire)
     drive = FH.resolve_download_url("https://drive.google.com/file/d/AbC_123/view?usp=sharing")
     check("Google Drive se convierte a URL de descarga", "id=AbC_123" in drive, drive)
+    check("GoFile se reconoce como alojamiento", FH.is_filehost_url("https://gofile.io/d/abc123"))
+    check("WeTransfer corto se reconoce como alojamiento", FH.is_filehost_url("https://we.tl/abc123"))
+    check("1fichier se reconoce como alojamiento experimental", FH.is_filehost_url("https://1fichier.com/?abc"))
     check("el catálogo informa los sitios compatibles",
-          "MediaFire" in T.sites_text() and "YouTube" in T.sites_text())
+          "GoFile" in T.sites_text() and "WeTransfer" in T.sites_text())
 
     print("\n" + "=" * 66)
     print(f" ✅ Correctas: {len(PASSED)}   ❌ Fallidas: {len(FAILED)}")
