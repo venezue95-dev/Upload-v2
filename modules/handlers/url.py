@@ -20,6 +20,7 @@ from pyrogram.types import Message
 
 from .. import texts as T
 from ..downloader import acheck_url, probe_url, url_to_filename
+from ..media_downloader import is_media_url
 from ..queue import QUEUE
 from ..runtime_settings import RUNTIME_SETTINGS
 from .common import AUTHORIZED, check_limits, enqueue, reply, spawn
@@ -80,6 +81,20 @@ async def _enqueue_single(client: Client, message: Message, url: str) -> None:
         )
         return
 
+    # Las plataformas multimedia se detectan automáticamente al pegar el
+    # enlace. /descargar sigue disponible para elegir formato y calidad.
+    if is_media_url(url):
+        task, error = await enqueue(
+            client, message, filename="descarga_mp4", file_size=0,
+            source="media", url=url, media_format="mp4", media_quality="720",
+        )
+        if error:
+            await reply(message, error)
+            return
+        QUEUE.touch_rate_limit(user_id)
+        log.info("[%s] descarga multimedia automática por %s | %s", task.task_id, user_id, url)
+        return
+
     # Consultamos metadatos (tamaño/nombre) para avisar de límites cuanto antes.
     info = await _probe(url)
     size = int(info.get("size") or 0)
@@ -124,7 +139,10 @@ async def _enqueue_many(client: Client, message: Message, urls: List[str]) -> No
             valid.append(url)
 
     # Sondeo en paralelo: 10 enlaces tardan lo que el más lento, no la suma.
-    infos = await asyncio.gather(*(_probe(u) for u in valid))
+    infos = await asyncio.gather(*(
+        _probe(u) if not is_media_url(u) else asyncio.sleep(0, result={})
+        for u in valid
+    ))
 
     for url, info in zip(valid, infos):
         size = int(info.get("size") or 0)
@@ -135,8 +153,16 @@ async def _enqueue_many(client: Client, message: Message, urls: List[str]) -> No
             rejected.append(f"📏 {T.code(T.shorten(url, 44))} — {T.i('supera el máximo')}")
             continue
 
+        media = is_media_url(url)
         task, error = await enqueue(
-            client, message, filename=name, file_size=size, source="url", url=url
+            client,
+            message,
+            filename="descarga_mp4" if media else name,
+            file_size=size,
+            source="media" if media else "url",
+            url=url,
+            media_format="mp4",
+            media_quality="720",
         )
         if error:
             rejected.append(f"🚦 {T.code(T.shorten(url, 44))} — {T.i(T.shorten(_plain(error), 40))}")

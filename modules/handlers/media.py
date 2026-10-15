@@ -29,7 +29,7 @@ _URL_RE = re.compile(r"https?://[^\s<>\"')]+", re.IGNORECASE)
 
 
 def register(app: Client) -> None:
-    @app.on_message(filters.command("descargar") & AUTHORIZED)
+    @app.on_message(filters.command(["descargar", "download"]) & AUTHORIZED)
     async def _download(client: Client, message: Message):
         args = list(message.command or [])[1:]
         url = next((x.rstrip(".,;:)") for x in args if _URL_RE.fullmatch(x)), None)
