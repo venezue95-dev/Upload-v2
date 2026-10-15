@@ -163,7 +163,14 @@ def _safe_request(session: requests.Session, method: str, url: str, **kwargs):
 def probe_url(url: str, session: Optional[requests.Session] = None) -> dict:
     """HEAD (con fallback a GET) para conocer tamaño, nombre y rangos."""
     session = session or requests.Session()
-    info = {"size": 0, "filename": "", "ranges": False, "content_type": ""}
+    original_url = url
+    try:
+        from .filehost import resolve_download_url
+        url = resolve_download_url(url, session)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("resolve_download_url(%s) falló: %s", url, exc)
+        raise
+    info = {"size": 0, "filename": "", "ranges": False, "content_type": "", "url": url}
     headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}
     r = None
 
@@ -200,6 +207,7 @@ def probe_url(url: str, session: Optional[requests.Session] = None) -> dict:
     finally:
         if r is not None:
             r.close()
+    info["source_url"] = original_url
     return info
 
 
@@ -228,12 +236,16 @@ def download_url_range(
       contendría los bytes del principio y el archivo final quedaría corrupto.
     """
     headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}
+    original_url = url
     ranged = offset is not None and length is not None
     if ranged:
         headers["Range"] = f"bytes={offset}-{offset + length - 1}"
 
     written = 0
     with requests.Session() as session:
+        from .filehost import is_filehost_url, resolve_download_url
+        if is_filehost_url(url):
+            url = resolve_download_url(url, session)
         r = _safe_request(session, "GET", url, stream=True,
                           timeout=HTTP_TIMEOUT, headers=headers)
         try:
@@ -242,6 +254,8 @@ def download_url_range(
                     f"el servidor no admite descargas parciales (HTTP {r.status_code})"
                 )
             r.raise_for_status()
+            if is_filehost_url(original_url) and "text/html" in (r.headers.get("content-type") or "").lower():
+                raise RuntimeError("el alojamiento devolvió una página HTML en vez del archivo")
             total = int(r.headers.get("content-length") or 0)
             limit = length if ranged else None
 

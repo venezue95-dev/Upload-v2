@@ -408,6 +408,31 @@ async def main() -> int:
     check("CAMBIOS.md explica el arreglo del progreso",
           "progreso" in cam.lower() and "RateMeter" in cam)
 
+    print("\n▶ Resolutores de alojamientos de archivos")
+    import modules.filehost as FH
+    dropbox = FH.resolve_download_url("https://www.dropbox.com/s/abc/archivo.zip?dl=0")
+    check("Dropbox se convierte a descarga directa", "dl=1" in dropbox, dropbox)
+    pixeldrain = FH.resolve_download_url("https://pixeldrain.com/u/AbC_123")
+    check("Pixeldrain se convierte a API de archivo",
+          pixeldrain == "https://pixeldrain.com/api/file/AbC_123", pixeldrain)
+
+    class _FakeResponse:
+        status_code = 200
+        text = '<a id="downloadButton" href="https://download.mediafire.com/test/file.bin">Download</a>'
+        headers = {}
+        def raise_for_status(self):
+            return None
+        def close(self):
+            return None
+
+    original_request = FH._safe_request
+    FH._safe_request = lambda *args, **kwargs: _FakeResponse()
+    try:
+        mediafire = FH.resolve_download_url("https://www.mediafire.com/file/abc/file.bin")
+    finally:
+        FH._safe_request = original_request
+    check("MediaFire extrae el botón de descarga", mediafire.endswith("/file.bin"), mediafire)
+
     print("\n" + "=" * 66)
     print(f" ✅ Correctas: {len(PASSED)}   ❌ Fallidas: {len(FAILED)}")
     for item in FAILED:

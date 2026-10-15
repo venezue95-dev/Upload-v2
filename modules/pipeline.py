@@ -221,7 +221,8 @@ async def _resolve_source(client, task: UploadTask) -> dict:
         name = info.get("filename") or task.filename or url_to_filename(url)
         return {
             "kind": "url",
-            "url": url,
+            "url": info.get("source_url") or url,
+            "resolved_url": info.get("url") or url,
             "size": int(info.get("size") or task.file_size or 0),
             "name": name,
             "ranges": bool(info.get("ranges")),
