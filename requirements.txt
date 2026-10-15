@@ -3,9 +3,9 @@ pyrogram==2.0.106
 # Acelerador criptográfico (opcional pero muy recomendable: sube/baja más rápido)
 TgCrypto==1.2.5
 
-# Cliente toDus S3. OJO: la versión actual de la librería expone `S3Client`
-# (el bot detecta automáticamente esa API y también la antigua NamespaceManager).
-todus-client @ git+https://github.com/nyxthor-dev/todus-client.git
+# Cliente toDus S3. El repositorio Git original ya no es público; la versión
+# publicada en PyPI mantiene el módulo `todus.S3Client` que usa el adaptador.
+todus-client==3.5.0
 # Dependencias de la librería todus (por si se instala sin resolver extras)
 tqdm>=4.50
 requests>=2.25
