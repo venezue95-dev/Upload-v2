@@ -205,8 +205,8 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         log.error("No se pudo inicializar el cliente de almacenamiento: %s", exc)
         log.error(
-            "Instala la librería con: pip install "
-            "'todus-client @ git+https://github.com/nyxthor-dev/todus-client.git'"
+            "Comprueba que requirements.txt instale 'todus-client==3.5.0' "
+            "y que el entorno pueda acceder a PyPI."
         )
         return 2
 

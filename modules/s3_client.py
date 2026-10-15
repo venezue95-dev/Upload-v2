@@ -259,7 +259,7 @@ class S3Client:
                 except Exception as exc:  # pragma: no cover
                     raise S3Error(
                         "La librería 'todus' no está instalada. Instálala con:\n"
-                        "  pip install git+https://github.com/nyxthor-dev/todus-client.git"
+                        "  pip install todus-client==3.5.0"
                     ) from exc
                 import todus as todus_mod
 
