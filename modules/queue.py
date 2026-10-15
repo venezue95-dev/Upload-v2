@@ -128,6 +128,7 @@ class UploadTask:
         self.url = url
         self.media_format = "mp4"
         self.media_quality = "720"
+        self.requested_chunk_mb = 0
         self.priority = int(priority)
         self.resumed = resumed
 
@@ -530,6 +531,7 @@ class UploadTask:
             "url": self.url,
             "media_format": self.media_format,
             "media_quality": self.media_quality,
+            "requested_chunk_mb": self.requested_chunk_mb,
             "priority": self.priority,
             "status": self.status.value,
             "attempts": self.attempts,
@@ -557,6 +559,7 @@ class UploadTask:
         )
         task.media_format = data.get("media_format", "mp4")
         task.media_quality = data.get("media_quality", "720")
+        task.requested_chunk_mb = int(data.get("requested_chunk_mb") or 0)
         task.status_message_id = data.get("status_message_id")
         task.attempts = int(data.get("attempts", 1))
         created = data.get("created_at")

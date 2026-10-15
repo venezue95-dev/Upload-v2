@@ -137,7 +137,8 @@ async def _run_once(client, task: UploadTask) -> None:
         return
 
     # ---------------- 2. Modo de trabajo ----------------
-    chunk_bytes = max(_MI_B, settings.chunk_bytes)
+    user_chunk = int(getattr(task, "requested_chunk_mb", 0) or 0)
+    chunk_bytes = max(_MI_B, user_chunk * _MI_B if user_chunk else settings.chunk_bytes)
     if task.resume_folder and task.chunk_size:
         # Reanudación: las partes ya subidas se cortaron con el tamaño de trozo
         # de entonces. Si el owner lo cambió entretanto, hay que conservarlo o

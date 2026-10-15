@@ -80,6 +80,11 @@ CREATE TABLE IF NOT EXISTS quota_reservations (
     reserved_at  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_quota_res_user ON quota_reservations(user_id);
+
+CREATE TABLE IF NOT EXISTS user_preferences (
+    user_id       INTEGER PRIMARY KEY,
+    chunk_size_mb INTEGER NOT NULL
+);
 """
 
 
@@ -268,6 +273,36 @@ def touch_user(user_id: int, username: str = "") -> None:
             conn.commit()
     except Exception as exc:  # pragma: no cover
         log.debug("touch_user falló: %s", exc)
+
+
+def get_user_chunk_size(user_id: int) -> Optional[int]:
+    """Devuelve el chunk del usuario o None para usar el ajuste global."""
+    try:
+        row = _conn().execute(
+            "SELECT chunk_size_mb FROM user_preferences WHERE user_id=?", (user_id,)
+        ).fetchone()
+        return int(row[0]) if row else None
+    except Exception as exc:  # pragma: no cover
+        log.debug("get_user_chunk_size falló: %s", exc)
+        return None
+
+
+def set_user_chunk_size(user_id: int, size_mb: int) -> None:
+    with _LOCK:
+        conn = _conn()
+        conn.execute(
+            "INSERT INTO user_preferences(user_id, chunk_size_mb) VALUES(?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET chunk_size_mb=excluded.chunk_size_mb",
+            (user_id, int(size_mb)),
+        )
+        conn.commit()
+
+
+def clear_user_chunk_size(user_id: int) -> None:
+    with _LOCK:
+        conn = _conn()
+        conn.execute("DELETE FROM user_preferences WHERE user_id=?", (user_id,))
+        conn.commit()
 
 
 # ----------------------------------------------------------------------

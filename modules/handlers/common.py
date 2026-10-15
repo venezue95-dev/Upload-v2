@@ -226,6 +226,7 @@ async def enqueue(
     )
     task.media_format = media_format
     task.media_quality = media_quality
+    task.requested_chunk_mb = int(storage.get_user_chunk_size(user.id) or 0)
 
     allowed, used, limit = storage.reserve_quota(
         user.id, task.task_id, file_size, owner=is_owner(user.id)
