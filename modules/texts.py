@@ -313,6 +313,27 @@ def help_text(page: int) -> str:
     return cut(HELP_PAGES[page] + f"\n\n<i>Página {page}/{HELP_PAGE_COUNT}</i>")
 
 
+def sites_text() -> str:
+    """Catálogo honesto: separa soporte probado de soporte experimental."""
+    return cut(
+        "<b>🌐 Sitios compatibles</b>\n\n"
+        "<b>📁 Alojamientos de archivos</b>\n"
+        "✅ MediaFire · Dropbox · Pixeldrain\n"
+        "🧪 File.io · Google Drive (enlaces públicos)\n\n"
+        "<b>🎬 Plataformas multimedia</b>\n"
+        "✅ Instagram · TikTok · Facebook · Dailymotion\n"
+        "✅ Vimeo · Twitch · Reddit · SoundCloud · Bilibili\n"
+        "✅ Rumble · Pinterest · Streamable\n"
+        "🚫 YouTube está desactivado actualmente.\n\n"
+        "<b>🔗 Enlaces directos</b>\n"
+        "✅ Cualquier URL http(s) que entregue directamente un archivo.\n\n"
+        "<b>⏳ Pendientes de integración específica</b>\n"
+        "GoFile · 1fichier · Ufile · WeTransfer · AnonFiles\n\n"
+        "<i>Los enlaces privados, protegidos con contraseña, CAPTCHA o inicio de sesión "
+        "pueden no funcionar aunque el sitio aparezca en la lista.</i>"
+    )
+
+
 # ----------------------------------------------------------------------
 # Progreso (mensaje de la tarea mientras se ejecuta).
 # ----------------------------------------------------------------------

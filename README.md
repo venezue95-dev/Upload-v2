@@ -114,6 +114,7 @@ ni pegar saltos.
 |---|---|---|
 | `/start` · `/menu` | todos | Menú con botones (cola, historial, estado, ayuda) |
 | `/help` | todos | Ayuda en 3 páginas (lo básico, la cola, partes y consejos) |
+| `/sitios` · `/compatibles` | todos | Catálogo de sitios compatibles y estado del soporte |
 | `/cola` | todos | Tus tareas: estado, posición, %, velocidad, ETA y botones |
 | `/historial` | todos | Tus últimas subidas completadas con enlaces |
 | `/cancelar` | todos | Cancela todas tus tareas (con confirmación) |

@@ -432,6 +432,10 @@ async def main() -> int:
     finally:
         FH._safe_request = original_request
     check("MediaFire extrae el botón de descarga", mediafire.endswith("/file.bin"), mediafire)
+    drive = FH.resolve_download_url("https://drive.google.com/file/d/AbC_123/view?usp=sharing")
+    check("Google Drive se convierte a URL de descarga", "id=AbC_123" in drive, drive)
+    check("el catálogo informa los sitios compatibles",
+          "MediaFire" in T.sites_text() and "YouTube" in T.sites_text())
 
     print("\n" + "=" * 66)
     print(f" ✅ Correctas: {len(PASSED)}   ❌ Fallidas: {len(FAILED)}")

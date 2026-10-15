@@ -18,7 +18,8 @@ import requests
 from .downloader import USER_AGENT, _safe_request, check_url
 
 FILE_HOST_MARKERS = (
-    "mediafire.com", "dropbox.com", "pixeldrain.com",
+    "mediafire.com", "dropbox.com", "pixeldrain.com", "file.io", "drive.google.com",
+    "docs.google.com",
 )
 
 
@@ -41,6 +42,20 @@ def _dropbox_direct(url: str) -> str:
 def _pixeldrain_direct(url: str) -> Optional[str]:
     match = re.search(r"/(?:u|d)/([A-Za-z0-9_-]+)", urlparse(url).path)
     return f"https://pixeldrain.com/api/file/{match.group(1)}" if match else None
+
+
+def _google_drive_direct(url: str) -> Optional[str]:
+    parsed = urlparse(url)
+    match = re.search(r"/(?:file/d|document/d|spreadsheets/d|presentation/d)/([A-Za-z0-9_-]+)", parsed.path)
+    if not match:
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        file_id = query.get("id")
+    else:
+        file_id = match.group(1)
+    return (
+        f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
+        if file_id else None
+    )
 
 
 def _mediafire_direct(page_url: str, session: requests.Session) -> str:
@@ -112,6 +127,12 @@ def resolve_download_url(url: str, session: Optional[requests.Session] = None) -
         return _dropbox_direct(url)
     if host == "pixeldrain.com" or host.endswith(".pixeldrain.com"):
         return _pixeldrain_direct(url) or url
+    if host == "drive.google.com" or host == "docs.google.com":
+        return _google_drive_direct(url) or url
+    if host == "file.io" or host.endswith(".file.io"):
+        # File.io normalmente redirige a la URL del objeto; _safe_request
+        # seguirá y validará ese salto durante probe/download.
+        return url
     if host == "mediafire.com" or host.endswith(".mediafire.com"):
         own = session or requests.Session()
         return _mediafire_direct(url, own)

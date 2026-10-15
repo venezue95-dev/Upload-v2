@@ -72,6 +72,10 @@ def help_view(page: int) -> View:
     return T.help_text(page), K.help_keyboard(page)
 
 
+def sites_view() -> View:
+    return T.sites_text(), K.panel_keyboard()
+
+
 # ----------------------------------------------------------------------
 # Cola.
 # ----------------------------------------------------------------------

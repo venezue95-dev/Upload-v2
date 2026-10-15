@@ -170,6 +170,7 @@ def main_menu_keyboard(*, is_owner_user: bool) -> Markup:
          Btn("🏆 Top usuarios", callback_data="menu:top")],
         [Btn("📡 Estado", callback_data="menu:status"),
          Btn("📖 Ayuda", callback_data="menu:help:1")],
+        [Btn("🌐 Sitios compatibles", callback_data="menu:sites")],
     ]
     if is_owner_user:
         rows.append([Btn("🛠 Administración", callback_data="menu:admin")])

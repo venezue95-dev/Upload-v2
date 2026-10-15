@@ -152,6 +152,8 @@ async def _menu(ctx: Ctx, args: list) -> None:
         await ctx.show(views.home_view(ctx.user_id, is_owner_user=ctx.is_owner, admin_name=name))
     elif action == "help":
         await ctx.show(views.help_view(_int(args[1] if len(args) > 1 else None)))
+    elif action == "sites":
+        await ctx.show(views.sites_view())
     elif action == "cola":
         await ctx.show(views.queue_view(ctx.user_id, "m", 1, is_owner_user=ctx.is_owner))
     elif action == "hist":

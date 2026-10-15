@@ -34,6 +34,10 @@ def register(app: Client) -> None:
     async def _help(client: Client, message: Message):
         await reply(message, *views.help_view(1))
 
+    @app.on_message(filters.command(["sitios", "compatibles"]) & AUTHORIZED)
+    async def _sites(client: Client, message: Message):
+        await reply(message, *views.sites_view())
+
     @app.on_message(filters.command("status") & AUTHORIZED)
     async def _status(client: Client, message: Message):
         async def work():
