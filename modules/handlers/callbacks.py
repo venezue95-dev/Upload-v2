@@ -124,6 +124,8 @@ async def dispatch(ctx: Ctx, data: str) -> None:
         await _admin(ctx, parts[1:])
     elif head == "media":
         await media.handle_callback(ctx, parts[1:])
+    elif head == "chunk":
+        await _chunk(ctx, parts[1:])
     # "noop" y desconocidos: solo se responde (lo hace el finally del router).
 
 
@@ -154,6 +156,8 @@ async def _menu(ctx: Ctx, args: list) -> None:
         await ctx.show(views.help_view(_int(args[1] if len(args) > 1 else None)))
     elif action == "sites":
         await ctx.show(views.sites_view())
+    elif action == "chunk":
+        await ctx.show(views.chunk_view(ctx.user_id))
     elif action == "cola":
         await ctx.show(views.queue_view(ctx.user_id, "m", 1, is_owner_user=ctx.is_owner))
     elif action == "hist":
@@ -177,6 +181,29 @@ async def _menu(ctx: Ctx, args: list) -> None:
             await ctx.show(await views.system_view())
         else:
             await ctx.show(views.settings_view(1, is_owner_user=True))
+
+
+async def _chunk(ctx: Ctx, args: list) -> None:
+    if not args:
+        await ctx.show(views.chunk_view(ctx.user_id))
+        return
+    action = args[0]
+    if action == "info":
+        await ctx.answer("Usa /chunk N, por ejemplo /chunk 350, entre 1 y 2000 MB.", alert=True)
+        return
+    if action == "reset":
+        storage.clear_user_chunk_size(ctx.user_id)
+        await ctx.answer("✅ Se restauró el valor global")
+        await ctx.show(views.chunk_view(ctx.user_id))
+        return
+    if action == "set" and len(args) > 1:
+        value = _int(args[1], 0)
+        if not 1 <= value <= 2000:
+            await ctx.answer("El tamaño debe estar entre 1 y 2000 MB.", alert=True)
+            return
+        storage.set_user_chunk_size(ctx.user_id, value)
+        await ctx.answer(f"✅ Chunk configurado: {value} MB")
+        await ctx.show(views.chunk_view(ctx.user_id))
 
 
 # ----------------------------------------------------------------------
