@@ -76,20 +76,6 @@ def sites_view() -> View:
     return T.sites_text(), K.panel_keyboard()
 
 
-def chunk_view(user_id: int) -> View:
-    current = storage.get_user_chunk_size(user_id)
-    shown = f"<b>{current} MB</b>" if current else "<b>valor global del bot</b>"
-    return (
-        "🧩 <b>Tamaño de chunks</b>\n\n"
-        f"Tu configuración actual: {shown}\n\n"
-        "Elige una opción para las tareas nuevas. Las tareas que ya están en cola "
-        "conservan su tamaño.\n\n"
-        "También puedes usar <code>/chunk 350</code> para indicar un valor personalizado "
-        "entre 1 y 2000 MB.",
-        K.chunk_keyboard(current),
-    )
-
-
 # ----------------------------------------------------------------------
 # Cola.
 # ----------------------------------------------------------------------

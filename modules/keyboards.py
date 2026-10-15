@@ -168,7 +168,6 @@ def main_menu_keyboard(*, is_owner_user: bool) -> Markup:
          Btn("🗂 Historial", callback_data="menu:hist")],
         [Btn("📊 Mi cuota", callback_data="menu:quota"),
          Btn("🏆 Top usuarios", callback_data="menu:top")],
-        [Btn("🧩 Tamaño de chunks", callback_data="menu:chunk")],
         [Btn("📡 Estado", callback_data="menu:status"),
          Btn("📖 Ayuda", callback_data="menu:help:1")],
         [Btn("🌐 Sitios compatibles", callback_data="menu:sites")],
@@ -176,22 +175,6 @@ def main_menu_keyboard(*, is_owner_user: bool) -> Markup:
     if is_owner_user:
         rows.append([Btn("🛠 Administración", callback_data="menu:admin")])
     return Markup(rows)
-
-
-def chunk_keyboard(current: Optional[int]) -> Markup:
-    selected = lambda value: "✅ " if current == value else ""
-    return Markup([
-        [Btn(f"{selected(50)}50 MB", callback_data="chunk:set:50"),
-         Btn(f"{selected(100)}100 MB", callback_data="chunk:set:100"),
-         Btn(f"{selected(200)}200 MB", callback_data="chunk:set:200")],
-        [Btn(f"{selected(400)}400 MB", callback_data="chunk:set:400"),
-         Btn(f"{selected(800)}800 MB", callback_data="chunk:set:800"),
-         Btn(f"{selected(1500)}1.5 GB", callback_data="chunk:set:1500")],
-        [Btn(f"{selected(2000)}2 GB", callback_data="chunk:set:2000"),
-         Btn("♻️ Usar valor global", callback_data="chunk:reset")],
-        [Btn("ℹ️ Personalizado: usar /chunk 350", callback_data="chunk:info")],
-        home_row(),
-    ])
 
 
 def help_keyboard(page: int) -> Markup:
