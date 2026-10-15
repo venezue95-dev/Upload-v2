@@ -35,7 +35,7 @@ from pyrogram.enums import ParseMode
 from config import CONFIG
 from modules import keyboards as K
 from modules import notifier, storage
-from modules.handlers import admin, basic, callbacks, cola, settings, upload, url
+from modules.handlers import admin, basic, callbacks, cola, media, settings, upload, url
 from modules import texts as T
 from modules.pipeline import cleanup_downloads_root, run_task
 from modules.queue import QUEUE
@@ -74,9 +74,10 @@ def register_handlers(app: Client) -> None:
     cola.register(app)
     settings.register(app)
     upload.register(app)
+    media.register(app)
     url.register(app)
     callbacks.register(app)
-    log.info("Handlers registrados (7 módulos)")
+    log.info("Handlers registrados (8 módulos)")
 
 
 async def resume_pending_tasks(client: Client) -> None:

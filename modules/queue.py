@@ -126,6 +126,8 @@ class UploadTask:
         self.file_size = int(file_size or 0)
         self.source = source                  # 'telegram' | 'url'
         self.url = url
+        self.media_format = "mp4"
+        self.media_quality = "720"
         self.priority = int(priority)
         self.resumed = resumed
 
@@ -526,6 +528,8 @@ class UploadTask:
             "file_size": self.file_size,
             "source": self.source,
             "url": self.url,
+            "media_format": self.media_format,
+            "media_quality": self.media_quality,
             "priority": self.priority,
             "status": self.status.value,
             "attempts": self.attempts,
@@ -551,6 +555,8 @@ class UploadTask:
             task_id=data.get("task_id"),
             resumed=True,
         )
+        task.media_format = data.get("media_format", "mp4")
+        task.media_quality = data.get("media_quality", "720")
         task.status_message_id = data.get("status_message_id")
         task.attempts = int(data.get("attempts", 1))
         created = data.get("created_at")
@@ -579,6 +585,8 @@ class UploadTask:
             username=row.get("username") or "",
             task_id=row.get("task_id"),
         )
+        task.media_format = row.get("media_format") or "mp4"
+        task.media_quality = row.get("media_quality") or "720"
         try:
             task.status = TaskStatus(row.get("status") or "completed")
         except ValueError:

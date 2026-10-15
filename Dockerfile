@@ -7,10 +7,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # gcc + libc6-dev: compilar TgCrypto | git: instalar todus-client desde GitHub
+# ffmpeg: fusionar vídeo/audio y convertir formatos | nodejs: soporte EJS de yt-dlp
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc \
         libc6-dev \
         git \
+        ffmpeg \
+        nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

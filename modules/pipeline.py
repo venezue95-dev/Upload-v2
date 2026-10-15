@@ -30,6 +30,8 @@ from typing import Callable, List, Optional, Sequence
 from config import CONFIG
 from . import keyboards as K
 from . import notifier
+from . import storage
+from .media_downloader import download_media, is_media_url, probe_media
 from . import texts as T
 from .downloader import (
     acheck_url,
@@ -118,6 +120,22 @@ async def _run_once(client, task: UploadTask) -> None:
 
     task.file_size = size
 
+    # Para medios cuyo tamaño no estaba disponible al encolar, la cuota se
+    # reserva aquí con el tamaño real obtenido por yt-dlp. La operación es
+    # idempotente para tareas que ya tenían una reserva inicial.
+    allowed, used, limit = storage.reserve_quota(
+        task.user_id,
+        task.task_id,
+        size,
+        owner=(CONFIG.owner_id is not None and task.user_id == CONFIG.owner_id),
+    )
+    if not allowed:
+        task.mark_finished(
+            TaskStatus.FAILED,
+            f"Cuota diaria insuficiente: usados/reservados {used} de {limit} bytes.",
+        )
+        return
+
     # ---------------- 2. Modo de trabajo ----------------
     chunk_bytes = max(_MI_B, settings.chunk_bytes)
     if task.resume_folder and task.chunk_size:
@@ -176,6 +194,24 @@ async def _run_once(client, task: UploadTask) -> None:
 # Resolución del origen.
 # ----------------------------------------------------------------------
 async def _resolve_source(client, task: UploadTask) -> dict:
+    if task.source == "media":
+        url = (task.url or "").strip()
+        ok, why = await acheck_url(url)
+        if not ok:
+            raise RuntimeError(f"URL rechazada: {why}")
+        if not is_media_url(url):
+            raise RuntimeError("el dominio no está habilitado para descargas multimedia")
+        info = await asyncio.to_thread(
+            probe_media, url, task.media_format, task.media_quality
+        )
+        return {
+            "kind": "media",
+            "url": url,
+            "size": int(info.get("size") or 0),
+            "name": info.get("filename") or task.filename,
+            "ranges": False,
+            "media": None,
+        }
     if task.source == "url":
         url = (task.url or "").strip()
         ok, why = await acheck_url(url)
@@ -304,6 +340,17 @@ async def _run_classic(client, task: UploadTask, source: dict, chunk_bytes: int,
     download_started = time.monotonic()
     if source["kind"] == "telegram":
         await download_telegram_full(client, source["media"], local_path, task, progress=cb)
+    elif source["kind"] == "media":
+        generated = await asyncio.to_thread(
+            download_media,
+            source["url"],
+            os.path.join(os.path.dirname(local_path), task.task_id),
+            task,
+            task.media_format,
+            task.media_quality,
+        )
+        if os.path.abspath(generated) != os.path.abspath(local_path):
+            os.replace(generated, local_path)
     else:
         await asyncio.to_thread(
             download_url_range, source["url"], local_path, task, progress=cb
@@ -318,6 +365,16 @@ async def _run_classic(client, task: UploadTask, source: dict, chunk_bytes: int,
     if size > max_bytes:
         raise RuntimeError(
             f"el archivo descargado ({_size(size)}) supera el máximo ({_size(max_bytes)})"
+        )
+    allowed, used, limit = storage.reserve_quota(
+        task.user_id,
+        task.task_id,
+        size,
+        owner=(CONFIG.owner_id is not None and task.user_id == CONFIG.owner_id),
+    )
+    if not allowed:
+        raise RuntimeError(
+            f"cuota diaria insuficiente después de descargar: {used} de {limit} bytes"
         )
     task.set_fetched(size)
     # Aprendemos la velocidad real de bajada para futuras estimaciones.
@@ -501,6 +558,9 @@ def _cleanup_task_files(task: UploadTask) -> None:
     """Borra los temporales de la tarea (archivo completo y trozos)."""
     user_dir = os.path.join(CONFIG.download_dir, str(task.user_id))
     if os.path.isdir(user_dir):
+        task_media_dir = os.path.join(user_dir, task.task_id)
+        if os.path.isdir(task_media_dir):
+            shutil.rmtree(task_media_dir, ignore_errors=True)
         for entry in os.scandir(user_dir):
             if entry.is_file() and task.task_id in entry.name:
                 _remove(entry.path)

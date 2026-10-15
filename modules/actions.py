@@ -129,6 +129,8 @@ async def retry_task(client, task: UploadTask) -> Tuple[bool, str]:
         max_attempts=1 + int(CONFIG.queue.auto_retries),
     )
     clone.attempts = task.attempts + 1
+    clone.media_format = getattr(task, "media_format", "mp4")
+    clone.media_quality = getattr(task, "media_quality", "720")
     clone.chunk_size = task.chunk_size
     clone.parts_total = task.parts_total
 

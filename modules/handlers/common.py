@@ -201,6 +201,8 @@ async def enqueue(
     file_size: int,
     source: str,
     url: Optional[str] = None,
+    media_format: str = "mp4",
+    media_quality: str = "720",
     silent: bool = False,
 ) -> Tuple[Optional[UploadTask], Optional[str]]:
     """
@@ -222,6 +224,8 @@ async def enqueue(
         priority=CONFIG.queue.owner_priority if is_owner(user.id) else 0,
         max_attempts=1 + int(CONFIG.queue.auto_retries),
     )
+    task.media_format = media_format
+    task.media_quality = media_quality
 
     allowed, used, limit = storage.reserve_quota(
         user.id, task.task_id, file_size, owner=is_owner(user.id)

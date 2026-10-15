@@ -49,7 +49,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     deleted_at   REAL,
     chat_id      INTEGER,
     message_id   INTEGER,
-    url          TEXT
+    url          TEXT,
+    media_format TEXT DEFAULT 'mp4',
+    media_quality TEXT DEFAULT '720'
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, finished_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -102,6 +104,8 @@ def init(cfg=None) -> None:
             "ALTER TABLE tasks ADD COLUMN chat_id INTEGER",
             "ALTER TABLE tasks ADD COLUMN message_id INTEGER",
             "ALTER TABLE tasks ADD COLUMN url TEXT",
+            "ALTER TABLE tasks ADD COLUMN media_format TEXT DEFAULT 'mp4'",
+            "ALTER TABLE tasks ADD COLUMN media_quality TEXT DEFAULT '720'",
         ):
             try:
                 conn.execute(ddl)
@@ -145,14 +149,16 @@ def record_task(task, cfg=None) -> None:
                 INSERT INTO tasks (task_id, user_id, username, filename, file_size,
                                    source, status, parts, keys, urls, error,
                                    created_at, finished_at, duration, base,
-                                   chat_id, message_id, url)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                   chat_id, message_id, url, media_format, media_quality)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     status=excluded.status, parts=excluded.parts, keys=excluded.keys,
                     urls=excluded.urls, error=excluded.error,
                     finished_at=excluded.finished_at, duration=excluded.duration,
                     base=excluded.base, chat_id=excluded.chat_id,
-                    message_id=excluded.message_id, url=excluded.url
+                    message_id=excluded.message_id, url=excluded.url,
+                    media_format=excluded.media_format,
+                    media_quality=excluded.media_quality
                 """,
                 (
                     task.task_id,
@@ -173,6 +179,8 @@ def record_task(task, cfg=None) -> None:
                     int(getattr(task, "chat_id", 0) or 0),
                     int(getattr(task, "message_id", 0) or 0),
                     getattr(task, "url", None) or "",
+                    getattr(task, "media_format", "mp4"),
+                    getattr(task, "media_quality", "720"),
                 ),
             )
             size = int(task.bytes_transferred or task.file_size or 0)
@@ -465,9 +473,9 @@ def reserve_quota(user_id: int, task_id: str, file_size: int, *, owner: bool = F
                  WHERE user_id=? AND status='completed' AND finished_at>=?)
                 +
                 (SELECT COALESCE(SUM(file_size),0) FROM quota_reservations
-                 WHERE user_id=?) AS total
+                 WHERE user_id=? AND task_id<>?) AS total
             """,
-            (user_id, cutoff, user_id),
+            (user_id, cutoff, user_id, task_id),
         ).fetchone()
         used = int(row["total"] or 0)
         if used + size > limit:

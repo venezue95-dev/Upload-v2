@@ -12,3 +12,6 @@ requests>=2.25
 
 # Variables de entorno en desarrollo local (en Docker se usa env_file)
 python-dotenv==1.0.1
+
+# Descargas multimedia explícitas (/descargar). FFmpeg se instala en Docker.
+yt-dlp[default]>=2025.9.26
