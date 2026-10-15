@@ -29,6 +29,7 @@ from ..notifier import send_links_txt
 from ..queue import QUEUE
 from ..runtime_settings import RUNTIME_SETTINGS
 from .common import can_manage, is_authorized, is_owner
+from . import media
 
 log = logging.getLogger("s3_bot.callbacks")
 
@@ -121,6 +122,8 @@ async def dispatch(ctx: Ctx, data: str) -> None:
         await _settings(ctx, parts[1:])
     elif head == "adm":
         await _admin(ctx, parts[1:])
+    elif head == "media":
+        await media.handle_callback(ctx, parts[1:])
     # "noop" y desconocidos: solo se responde (lo hace el finally del router).
 
 

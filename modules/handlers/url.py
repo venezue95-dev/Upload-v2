@@ -90,23 +90,8 @@ async def _enqueue_single(client: Client, message: Message, url: str) -> None:
     # Las plataformas multimedia se detectan automáticamente al pegar el
     # enlace. /descargar sigue disponible para elegir formato y calidad.
     if is_media_url(url):
-        task, error = await enqueue(
-            client, message, filename="descarga_mp4", file_size=0,
-            source="media", url=url, media_format="mp4", media_quality="720",
-        )
-        if error:
-            await reply(message, error)
-            return
-        QUEUE.touch_rate_limit(user_id)
-        log.info("[%s] descarga multimedia automática por %s | %s", task.task_id, user_id, url)
-        await reply(
-            message,
-            "📥 <b>Descarga multimedia en cola</b>\n\n"
-            "Formato predeterminado: <code>MP4 · 720p</code>.\n"
-            "Para elegir otra opción usa, por ejemplo:\n"
-            f"<code>/descargar {T.esc(url)} mp3</code>\n"
-            f"<code>/descargar {T.esc(url)} mp4 1080</code>",
-        )
+        from . import media
+        await media.offer_media_options(message, url)
         return
 
     # Consultamos metadatos (tamaño/nombre) para avisar de límites cuanto antes.

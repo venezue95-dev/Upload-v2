@@ -52,6 +52,26 @@ def cb_task(action: str, task_id: str, ctx: str = MSG) -> str:
     return f"t:{action}:{task_id}:{ctx}"
 
 
+def media_format_keyboard(token: str) -> Markup:
+    return Markup([
+        [Btn("🎬 MP4", callback_data=f"media:format:{token}:mp4"),
+         Btn("🎵 MP3", callback_data=f"media:format:{token}:mp3")],
+        [Btn("🎧 M4A", callback_data=f"media:format:{token}:m4a"),
+         Btn("🎼 OPUS", callback_data=f"media:format:{token}:opus")],
+    ])
+
+
+def media_quality_keyboard(token: str) -> Markup:
+    return Markup([
+        [Btn("360p", callback_data=f"media:quality:{token}:360"),
+         Btn("480p", callback_data=f"media:quality:{token}:480"),
+         Btn("720p", callback_data=f"media:quality:{token}:720")],
+        [Btn("1080p", callback_data=f"media:quality:{token}:1080"),
+         Btn("1440p", callback_data=f"media:quality:{token}:1440"),
+         Btn("Máxima", callback_data=f"media:quality:{token}:max")],
+    ])
+
+
 def cb_cola(scope: str, page: int = 1) -> str:
     return f"cola:{scope}:{page}"
 
