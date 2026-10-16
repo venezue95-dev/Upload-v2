@@ -55,14 +55,23 @@ def _run(package: str, output: Path) -> Path:
     env["HOME"] = str(_home())
     env["PYTHONUNBUFFERED"] = "1"
     dispenser = os.getenv("PLAYSTORE_DISPENSER_URL", "").strip()
+    account_email = os.getenv("GPLAY_ACCOUNT_EMAIL", "").strip()
+    aas_token = os.getenv("GPLAY_AAS_TOKEN", "").strip()
     auth = _home() / ".gplay-auth.json"
     if not auth.exists():
-        if not dispenser:
+        if account_email and aas_token:
+            auth_cmd = [
+                "python", str(script), "auth-account",
+                "--email", account_email,
+                "--aas-token", aas_token,
+            ]
+        elif dispenser:
+            auth_cmd = ["python", str(script), "auth", "--dispenser", dispenser]
+        else:
             raise RuntimeError(
-                "Play Store necesita PLAYSTORE_DISPENSER_URL para obtener el token inicial; "
-                "configura un dispenser compatible en Railway"
+                "Play Store necesita autenticación. Configura GPLAY_ACCOUNT_EMAIL y "
+                "GPLAY_AAS_TOKEN en Railway (recomendado), o PLAYSTORE_DISPENSER_URL"
             )
-        auth_cmd = ["python", str(script), "auth", "--dispenser", dispenser]
         result = subprocess.run(auth_cmd, cwd=root, env=env, capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "autenticación fallida").strip()
