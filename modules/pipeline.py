@@ -32,6 +32,7 @@ from . import keyboards as K
 from . import notifier
 from . import storage
 from .media_downloader import download_media, is_media_url, probe_media
+from .playstore_downloader import download_play_store, package_from_url
 from . import texts as T
 from .downloader import (
     acheck_url,
@@ -195,6 +196,18 @@ async def _run_once(client, task: UploadTask) -> None:
 # Resolución del origen.
 # ----------------------------------------------------------------------
 async def _resolve_source(client, task: UploadTask) -> dict:
+    if task.source == "playstore":
+        package = package_from_url(task.url or "")
+        if not package:
+            raise RuntimeError("enlace de Google Play inválido")
+        return {
+            "kind": "playstore",
+            "url": task.url,
+            "size": 0,
+            "name": f"{package}.apk",
+            "ranges": False,
+            "media": None,
+        }
     if task.source == "media":
         url = (task.url or "").strip()
         ok, why = await acheck_url(url)
@@ -350,6 +363,14 @@ async def _run_classic(client, task: UploadTask, source: dict, chunk_bytes: int,
             task,
             task.media_format,
             task.media_quality,
+        )
+        if os.path.abspath(generated) != os.path.abspath(local_path):
+            os.replace(generated, local_path)
+    elif source["kind"] == "playstore":
+        generated = await download_play_store(
+            source["url"],
+            os.path.join(os.path.dirname(local_path), task.task_id),
+            task,
         )
         if os.path.abspath(generated) != os.path.abspath(local_path):
             os.replace(generated, local_path)

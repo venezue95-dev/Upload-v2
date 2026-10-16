@@ -21,6 +21,7 @@ from pyrogram.types import Message
 from .. import texts as T
 from ..downloader import acheck_url, probe_url, url_to_filename
 from ..media_downloader import is_blocked_media_url, is_media_url
+from ..playstore_downloader import is_play_store_url, package_from_url
 from ..queue import QUEUE
 from ..runtime_settings import RUNTIME_SETTINGS
 from .common import AUTHORIZED, check_limits, enqueue, reply, spawn
@@ -87,6 +88,18 @@ async def _enqueue_single(client: Client, message: Message, url: str) -> None:
         )
         return
 
+    if is_play_store_url(url):
+        package = package_from_url(url) or "aplicación"
+        task, error = await enqueue(
+            client, message, filename=f"{package}.apk", file_size=0,
+            source="playstore", url=url,
+        )
+        if error:
+            await reply(message, error)
+        else:
+            log.info("[%s] Play Store encolado por %s | %s", task.task_id, user_id, package)
+        return
+
     # Las plataformas multimedia se detectan automáticamente al pegar el
     # enlace. /descargar sigue disponible para elegir formato y calidad.
     if is_media_url(url):
@@ -141,7 +154,7 @@ async def _enqueue_many(client: Client, message: Message, urls: List[str]) -> No
 
     # Sondeo en paralelo: 10 enlaces tardan lo que el más lento, no la suma.
     infos = await asyncio.gather(*(
-        _probe(u) if not is_media_url(u) else asyncio.sleep(0, result={})
+        _probe(u) if not is_media_url(u) and not is_play_store_url(u) else asyncio.sleep(0, result={})
         for u in valid
     ))
 
@@ -155,12 +168,16 @@ async def _enqueue_many(client: Client, message: Message, urls: List[str]) -> No
             continue
 
         media = is_media_url(url)
+        playstore = is_play_store_url(url)
+        if playstore:
+            package = package_from_url(url) or "aplicacion"
+            name = f"{package}.apk"
         task, error = await enqueue(
             client,
             message,
             filename="descarga_mp4" if media else name,
             file_size=size,
-            source="media" if media else "url",
+            source="media" if media else ("playstore" if playstore else "url"),
             url=url,
             media_format="mp4",
             media_quality="720",

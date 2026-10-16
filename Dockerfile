@@ -8,12 +8,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # gcc + libc6-dev: compilar TgCrypto | git: instalar dependencias Git si fueran necesarias
 # ffmpeg: fusionar vídeo/audio y convertir formatos | nodejs: soporte EJS de yt-dlp
+# Java/apksigner: descargar y fusionar APK divididos de Google Play
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc \
         libc6-dev \
         git \
         ffmpeg \
         nodejs \
+        openjdk-17-jre-headless \
+        apksigner \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -25,6 +28,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Código del bot.
 COPY config.py bot.py healthcheck.py ./
 COPY modules/ ./modules/
+COPY third_party/gplay-apk-downloader/ ./third_party/gplay-apk-downloader/
 
 # Directorios persistentes.
 RUN mkdir -p /app/data /app/downloads

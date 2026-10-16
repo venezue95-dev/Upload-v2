@@ -321,6 +321,8 @@ def sites_text() -> str:
         "✅ MediaFire · Dropbox · Pixeldrain\n"
         "✅ GoFile · WeTransfer (enlaces públicos)\n"
         "🧪 File.io · Google Drive (enlaces públicos)\n\n"
+        "<b>📱 Aplicaciones</b>\n"
+        "✅ Google Play (aplicaciones gratuitas; requiere dispenser configurado)\n\n"
         "<b>🎬 Plataformas multimedia</b>\n"
         "✅ Instagram · TikTok · Facebook · Dailymotion\n"
         "✅ Vimeo · Twitch · Reddit · SoundCloud · Bilibili\n"
