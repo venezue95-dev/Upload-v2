@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         ffmpeg \
         nodejs \
-        openjdk-17-jre-headless \
+        openjdk-21-jre-headless \
         apksigner \
     && rm -rf /var/lib/apt/lists/*
 
