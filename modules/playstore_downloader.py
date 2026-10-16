@@ -7,6 +7,7 @@ un entorno persistente de autenticación y devuelve el APK generado.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import subprocess
@@ -57,9 +58,18 @@ def _run(package: str, output: Path) -> Path:
     dispenser = os.getenv("PLAYSTORE_DISPENSER_URL", "").strip()
     account_email = os.getenv("GPLAY_ACCOUNT_EMAIL", "").strip()
     aas_token = os.getenv("GPLAY_AAS_TOKEN", "").strip()
+    auth_json = os.getenv("GPLAY_AUTH_JSON", "").strip()
     auth = _home() / ".gplay-auth.json"
     if not auth.exists():
-        if account_email and aas_token:
+        if auth_json:
+            try:
+                data = json.loads(auth_json)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("GPLAY_AUTH_JSON no contiene JSON válido") from exc
+            if not isinstance(data, dict) or not data.get("authToken"):
+                raise RuntimeError("GPLAY_AUTH_JSON no contiene una sesión de Google Play válida")
+            auth.write_text(json.dumps(data), encoding="utf-8")
+        elif account_email and aas_token:
             auth_cmd = [
                 "python", str(script), "auth-account",
                 "--email", account_email,
