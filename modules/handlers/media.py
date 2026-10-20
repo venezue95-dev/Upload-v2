@@ -1,7 +1,7 @@
 """
 media.py
 ========
-Comando explícito para descargas multimedia mediante yt-dlp.
+Comando explícito para descargas multimedia.
 
 Sintaxis:
     /descargar URL
@@ -78,8 +78,8 @@ async def handle_callback(ctx, args: list[str]) -> None:
         await ctx.answer("Elige la calidad de vídeo")
         await ctx.show((
             "🎬 <b>Elige la calidad de vídeo</b>\n\n"
-            "Las opciones corresponden a los formatos detectados por yt-dlp.",
-            K.media_quality_keyboard(token, qualities or None),
+            "Las opciones corresponden a las calidades disponibles para este vídeo.",
+            K.media_quality_keyboard(token, qualities if is_youtube_url(url) else None),
         ))
         return
     if action == "format" and value == "mp4":
@@ -90,6 +90,9 @@ async def handle_callback(ctx, args: list[str]) -> None:
         await ctx.answer("Formato no disponible.", alert=True)
         return
     elif action == "quality":
+        if is_youtube_url(url) and value != "max" and value not in qualities:
+            await ctx.answer("Esa calidad no está disponible para este vídeo.", alert=True)
+            return
         media_format = "mp4"
         quality = value
     else:

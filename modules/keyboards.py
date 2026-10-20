@@ -62,7 +62,9 @@ def media_format_keyboard(token: str) -> Markup:
 
 
 def media_quality_keyboard(token: str, qualities: Optional[Sequence[str]] = None) -> Markup:
-    values = [str(q) for q in (qualities or ("360", "480", "720", "1080", "1440"))]
+    values = [str(q) for q in (
+        qualities if qualities is not None else ("360", "480", "720", "1080", "1440")
+    )]
     rows = []
     for start in range(0, len(values), 3):
         rows.append([

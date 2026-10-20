@@ -179,7 +179,7 @@ def _require_yt_dlp():
         return yt_dlp
     except ImportError as exc:
         raise RuntimeError(
-            "El motor multimedia no está instalado. Añade yt-dlp al despliegue."
+            "El motor multimedia no está disponible en este momento."
         ) from exc
 
 
@@ -284,16 +284,33 @@ def download_media(url: str, dest_dir: str, task: UploadTask,
         if task.is_cancelled:
             raise TaskCancelled("cancelada por el usuario")
         status = data.get("status")
+        info = data.get("info_dict") or {}
+        key = (
+            info.get("format_id") or data.get("tmpfilename")
+            or data.get("filename") or "media"
+        )
+        downloaded_by_key = hook.downloaded_by_key
+        totals_by_key = hook.totals_by_key
         if status == "downloading":
-            total = data.get("total_bytes") or data.get("total_bytes_estimate") or task.file_size
+            total = data.get("total_bytes") or data.get("total_bytes_estimate")
             downloaded = int(data.get("downloaded_bytes") or 0)
-            if total and not task.file_size and media_format == "mp4":
-                task.file_size = int(total)
-            task.set_fetched(downloaded)
-        elif status == "finished":
-            total = int(data.get("total_bytes") or data.get("total_bytes_estimate") or task.file_size or 0)
+            downloaded_by_key[key] = max(downloaded_by_key.get(key, 0), downloaded)
             if total:
-                task.set_fetched(total)
+                totals_by_key[key] = max(totals_by_key.get(key, 0), int(total))
+            expected = sum(totals_by_key.values())
+            if expected:
+                task.file_size = max(task.file_size, expected)
+            task.set_fetched(sum(downloaded_by_key.values()))
+        elif status == "finished":
+            total = int(data.get("total_bytes") or data.get("total_bytes_estimate") or 0)
+            if total:
+                totals_by_key[key] = max(totals_by_key.get(key, 0), total)
+                downloaded_by_key[key] = max(downloaded_by_key.get(key, 0), total)
+                task.file_size = max(task.file_size, sum(totals_by_key.values()))
+                task.set_fetched(sum(downloaded_by_key.values()))
+
+    hook.downloaded_by_key = {}
+    hook.totals_by_key = {}
 
     last_error = None
     for use_cookies in _youtube_cookie_modes(url):
@@ -320,10 +337,10 @@ def download_media(url: str, dest_dir: str, task: UploadTask,
         if os.path.isfile(path):
             candidates.append(path)
     if not candidates:
-        raise RuntimeError("yt-dlp no generó ningún archivo")
+        raise RuntimeError("no se pudo generar ningún archivo")
     path = max(candidates, key=os.path.getmtime)
     if os.path.getsize(path) <= 0:
-        raise RuntimeError("yt-dlp generó un archivo vacío")
+        raise RuntimeError("se generó un archivo vacío")
     final_size = os.path.getsize(path)
     task.file_size = final_size
     task.set_fetched(final_size)
