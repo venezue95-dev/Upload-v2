@@ -12,7 +12,7 @@ Los enlaces normales siguen usando el descargador HTTP directo y no cambian.
 """
 
 from __future__ import annotations
-
+import asyncio
 import logging
 import re
 import time
@@ -24,23 +24,33 @@ from pyrogram.types import Message
 
 from .. import texts as T
 from .. import keyboards as K
-from ..media_downloader import is_facebook_url, is_media_url, normalize_options
+from ..media_downloader import (
+    available_video_qualities, is_facebook_url, is_media_url, is_youtube_url,
+    normalize_options, probe_media,
+)
 from .common import AUTHORIZED, check_limits, enqueue, reply
 
 log = logging.getLogger("s3_bot.media_handler")
 _URL_RE = re.compile(r"https?://[^\s<>\"')]+", re.IGNORECASE)
-_PENDING: dict[str, tuple[int, object, str, float]] = {}
+_PENDING: dict[str, tuple[int, object, str, float, tuple[str, ...]]] = {}
 
 
 async def offer_media_options(message: Message, url: str) -> None:
     """Muestra botones para un enlace multimedia pegado sin comando."""
     _purge_pending()
     token = uuid.uuid4().hex[:10]
-    _PENDING[token] = (message.from_user.id, message, url, time.time())
+    qualities: tuple[str, ...] = ()
+    if is_youtube_url(url):
+        try:
+            info = await asyncio.to_thread(probe_media, url, "mp4", "max")
+            qualities = tuple(info.get("qualities") or ())
+        except Exception as exc:  # noqa: BLE001
+            log.info("No se pudieron consultar calidades de YouTube: %s", exc)
+    _PENDING[token] = (message.from_user.id, message, url, time.time(), qualities)
     await reply(
         message,
         "📥 <b>Enlace multimedia detectado</b>\n\n"
-        "Elige el formato de descarga. En Facebook podrás elegir la calidad del vídeo.",
+        "Elige el formato de descarga. Para vídeo aparecerán las calidades disponibles.",
         K.media_format_keyboard(token),
     )
 
@@ -63,13 +73,13 @@ async def handle_callback(ctx, args: list[str]) -> None:
     if not item or item[0] != ctx.user_id:
         await ctx.answer("Este panel expiró. Envía el enlace nuevamente.", alert=True)
         return
-    _, message, url, _ = item
-    if action == "format" and value == "mp4" and is_facebook_url(url):
+    _, message, url, _, qualities = item
+    if action == "format" and value == "mp4" and (is_facebook_url(url) or is_youtube_url(url)):
         await ctx.answer("Elige la calidad de vídeo")
         await ctx.show((
             "🎬 <b>Elige la calidad de vídeo</b>\n\n"
-            "La opción máxima utiliza la mejor calidad disponible.",
-            K.media_quality_keyboard(token),
+            "Las opciones corresponden a los formatos detectados por yt-dlp.",
+            K.media_quality_keyboard(token, qualities or None),
         ))
         return
     if action == "format" and value == "mp4":

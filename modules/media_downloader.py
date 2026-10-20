@@ -58,6 +58,18 @@ def normalize_options(media_format: str = "mp4", quality: str = "720") -> tuple[
     return media_format, quality
 
 
+def available_video_qualities(info: dict) -> list[str]:
+    """Devuelve alturas de vídeo válidas presentes en la respuesta de yt-dlp."""
+    found = set()
+    for fmt in info.get("formats") or []:
+        if fmt.get("vcodec") in (None, "none"):
+            continue
+        height = int(fmt.get("height") or 0)
+        if str(height) in QUALITIES and height > 0:
+            found.add(str(height))
+    return sorted(found, key=int)
+
+
 def _ydl_options(media_format: str, quality: str, *, output_dir: str,
                  url: Optional[str] = None,
                  download: bool, hook: Optional[Callable[[dict], None]] = None,
@@ -197,6 +209,7 @@ def probe_media(url: str, media_format: str = "mp4", quality: str = "720") -> Di
                     "filename": _safe_filename(f"{title}.{ext}"),
                     "duration": int(info.get("duration") or 0),
                     "extractor": info.get("extractor_key") or info.get("extractor") or "media",
+                    "qualities": available_video_qualities(info),
                 }
         except Exception as exc:  # noqa: BLE001
             last_error = exc

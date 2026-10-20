@@ -61,15 +61,16 @@ def media_format_keyboard(token: str) -> Markup:
     ])
 
 
-def media_quality_keyboard(token: str) -> Markup:
-    return Markup([
-        [Btn("360p", callback_data=f"media:quality:{token}:360"),
-         Btn("480p", callback_data=f"media:quality:{token}:480"),
-         Btn("720p", callback_data=f"media:quality:{token}:720")],
-        [Btn("1080p", callback_data=f"media:quality:{token}:1080"),
-         Btn("1440p", callback_data=f"media:quality:{token}:1440"),
-         Btn("Máxima", callback_data=f"media:quality:{token}:max")],
-    ])
+def media_quality_keyboard(token: str, qualities: Optional[Sequence[str]] = None) -> Markup:
+    values = [str(q) for q in (qualities or ("360", "480", "720", "1080", "1440"))]
+    rows = []
+    for start in range(0, len(values), 3):
+        rows.append([
+            Btn(f"{quality}p", callback_data=f"media:quality:{token}:{quality}")
+            for quality in values[start:start + 3]
+        ])
+    rows.append([Btn("Máxima", callback_data=f"media:quality:{token}:max")])
+    return Markup(rows)
 
 
 def cb_cola(scope: str, page: int = 1) -> str:
