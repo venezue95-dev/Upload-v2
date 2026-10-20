@@ -55,7 +55,8 @@ def normalize_options(media_format: str = "mp4", quality: str = "720") -> tuple[
 
 def _ydl_options(media_format: str, quality: str, *, output_dir: str,
                  url: Optional[str] = None,
-                 download: bool, hook: Optional[Callable[[dict], None]] = None) -> dict:
+                 download: bool, hook: Optional[Callable[[dict], None]] = None,
+                 use_cookies: bool = True) -> dict:
     media_format, quality = normalize_options(media_format, quality)
     height = ""
     if quality != "max":
@@ -111,9 +112,10 @@ def _ydl_options(media_format: str, quality: str, *, output_dir: str,
         }]
     if not download:
         opts["skip_download"] = True
-    cookiefile = _cookiefile_from_environment()
-    if cookiefile:
-        opts["cookiefile"] = cookiefile
+    if use_cookies:
+        cookiefile = _cookiefile_from_environment()
+        if cookiefile:
+            opts["cookiefile"] = cookiefile
     user_agent = os.getenv("YTDLP_USER_AGENT", "").strip()
     if user_agent:
         opts["http_headers"] = {"User-Agent": user_agent}
@@ -158,26 +160,45 @@ def _require_yt_dlp():
         ) from exc
 
 
+def _youtube_cookie_modes(url: str) -> tuple[bool, ...]:
+    """Usa primero el flujo público de yt-dlp y deja las cookies como respaldo."""
+    if is_youtube_url(url) and _cookiefile_from_environment():
+        return (False, True)
+    return (True,)
+
+
 def probe_media(url: str, media_format: str = "mp4", quality: str = "720") -> Dict:
     """Obtiene nombre y tamaño estimado sin descargar el archivo."""
     if not is_media_url(url):
         raise ValueError("el dominio no está habilitado para descargas multimedia")
     yt_dlp = _require_yt_dlp()
-    opts = _ydl_options(media_format, quality, output_dir=".", url=url, download=False)
-    opts["logger"] = log
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        if not info:
-            raise RuntimeError("no se pudieron obtener metadatos del enlace")
-        size = _estimate_selected_size(info, media_format, quality)
-        title = info.get("title") or info.get("id") or "descarga"
-        ext = media_format
-        return {
-            "size": int(size or 0),
-            "filename": _safe_filename(f"{title}.{ext}"),
-            "duration": int(info.get("duration") or 0),
-            "extractor": info.get("extractor_key") or info.get("extractor") or "media",
-        }
+    last_error = None
+    for use_cookies in _youtube_cookie_modes(url):
+        try:
+            opts = _ydl_options(
+                media_format, quality, output_dir=".", url=url,
+                download=False, use_cookies=use_cookies,
+            )
+            opts["logger"] = log
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if not info:
+                    raise RuntimeError("no se pudieron obtener metadatos del enlace")
+                size = _estimate_selected_size(info, media_format, quality)
+                title = info.get("title") or info.get("id") or "descarga"
+                ext = media_format
+                return {
+                    "size": int(size or 0),
+                    "filename": _safe_filename(f"{title}.{ext}"),
+                    "duration": int(info.get("duration") or 0),
+                    "extractor": info.get("extractor_key") or info.get("extractor") or "media",
+                }
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if use_cookies:
+                raise
+            log.info("yt-dlp sin cookies no pudo extraer %s; probando cookies de respaldo", url)
+    raise last_error  # type: ignore[misc]
 
 
 def _format_size(fmt: dict) -> int:
@@ -250,11 +271,24 @@ def download_media(url: str, dest_dir: str, task: UploadTask,
             if total:
                 task.set_fetched(total)
 
-    opts = _ydl_options(media_format, quality, output_dir=dest_dir, url=url,
-                         download=True, hook=hook)
-    opts["logger"] = log
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.download([url])
+    last_error = None
+    for use_cookies in _youtube_cookie_modes(url):
+        try:
+            opts = _ydl_options(
+                media_format, quality, output_dir=dest_dir, url=url,
+                download=True, hook=hook, use_cookies=use_cookies,
+            )
+            opts["logger"] = log
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if use_cookies:
+                raise
+            log.info("yt-dlp sin cookies no pudo descargar %s; probando cookies de respaldo", url)
+    if last_error is not None and len(_youtube_cookie_modes(url)) == 1:
+        raise last_error
 
     candidates = []
     for name in os.listdir(dest_dir):
