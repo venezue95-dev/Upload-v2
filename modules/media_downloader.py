@@ -38,11 +38,6 @@ def is_media_url(url: str) -> bool:
     return any(host == marker or host.endswith("." + marker) for marker in SUPPORTED_HOST_MARKERS)
 
 
-def is_youtube_url(url: str) -> bool:
-    host = (urlparse(url).hostname or "").lower().lstrip("www.")
-    return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
-
-
 def is_facebook_url(url: str) -> bool:
     host = (urlparse(url).hostname or "").lower().lstrip("www.")
     return host == "facebook.com" or host.endswith(".facebook.com") or host == "fb.watch"
@@ -116,13 +111,6 @@ def _ydl_options(media_format: str, quality: str, *, output_dir: str,
         }]
     if not download:
         opts["skip_download"] = True
-    if url and is_youtube_url(url):
-        # YouTube puede seleccionar tv_downgraded y responder "The page needs
-        # to be reloaded" aunque las cookies sean válidas. Estos clientes
-        # evitan esa ruta y mantienen web_safari como primera opción.
-        opts["extractor_args"] = {
-            "youtube": {"player_client": ["web_safari", "web_embedded", "-tv_downgraded"]}
-        }
     cookiefile = _cookiefile_from_environment()
     if cookiefile:
         opts["cookiefile"] = cookiefile
