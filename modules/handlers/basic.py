@@ -51,7 +51,7 @@ def register(app: Client) -> None:
                 f"Actual: <b>{value}</b>\n\n"
                 "Uso: <code>/chunk 350</code> para usar 350 MB.\n"
                 "Usa <code>/chunk predeterminado</code> para volver al ajuste global.\n"
-                "Rango permitido: <b>1–2000 MB</b>.",
+                "Rango permitido: <b>1–4096 MB (4 GB)</b>.",
             )
             return
         if raw in {"default", "predeterminado", "global", "0"}:
@@ -63,8 +63,8 @@ def register(app: Client) -> None:
         except ValueError:
             await reply(message, "⚠️ Indica un número entero en MB. Ejemplo: <code>/chunk 350</code>")
             return
-        if not 1 <= value <= 2000:
-            await reply(message, "⚠️ El tamaño debe estar entre <b>1 y 2000 MB</b>.")
+        if not 1 <= value <= 4096:
+            await reply(message, "⚠️ El tamaño debe estar entre <b>1 y 4096 MB</b> (4 GB máximo).")
             return
         storage.set_user_chunk_size(message.from_user.id, value)
         await reply(

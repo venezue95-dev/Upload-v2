@@ -145,7 +145,7 @@ class S3Config:
     retry_base_delay: float = 2.0
     retry_max_delay: float = 30.0
     timeout: int = 300
-    max_file_mb: int = 800
+    max_file_mb: int = 4096
     inline: bool = False
 
     def validate(self) -> None:
@@ -247,7 +247,7 @@ def load_config() -> AppConfig:
         retry_base_delay=_get_float("S3_RETRY_BASE_DELAY", 2.0),
         retry_max_delay=_get_float("S3_RETRY_MAX_DELAY", 30.0),
         timeout=_get_int("S3_TIMEOUT", 300),
-        max_file_mb=_get_int("MAX_FILE_MB", 800),
+        max_file_mb=_get_int("MAX_FILE_MB", 4096),
         inline=_get_bool("S3_INLINE", False),
     )
 

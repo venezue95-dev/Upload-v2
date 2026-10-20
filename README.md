@@ -246,7 +246,7 @@ API_HASH=abcdef1234567890abcdef1234567890
 BOT_TOKEN=1234567890:ABC-DEF_ghijklmnopqrstuvwxyz
 BOT_OWNER_ID=123456789
 BOT_ALLOWED_USERS=
-MAX_FILE_MB=800
+MAX_FILE_MB=4096
 S3_CHUNK_SIZE_MB=50
 S3_MAX_PARALLEL=3
 S3_MAX_RETRIES=10
@@ -324,11 +324,11 @@ Página 2 · **Subida y troceo**
 
 | Ajuste | Valores | Nota |
 |---|---|---|
-| 🧩 Trozo (chunk) | 10 / 25 / 50 / 100 / 200 / 400 / 800 / 1500 / 2000 MB | más pequeño = más partes y más enlaces |
+| 🧩 Trozo (chunk) | 10 / 25 / 50 / 100 / 200 / 400 / 800 / 1500 / 2000 / 4096 MB | más pequeño = más partes y más enlaces |
 | ⚡️ Partes en paralelo (por tarea) | 1 / 2 / 3 / 4 | por tarea |
 | 🏭 Subidas paralelas (todo el bot) | 2 / 4 / 6 / 8 / 12 | el freno global de toDus |
 | 🔁 Reintentos por parte | 3 / 5 / 10 | con backoff exponencial |
-| 📏 Máx. por archivo | 500 / 800 / 1000 / 2000 MB | límite por archivo |
+| 📏 Máx. por archivo | 500 / 800 / 1000 / 2000 / 4096 MB | límite por archivo |
 
 Página 3 · **Avanzado**
 
