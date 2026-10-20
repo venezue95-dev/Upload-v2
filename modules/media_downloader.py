@@ -38,6 +38,11 @@ def is_media_url(url: str) -> bool:
     return any(host == marker or host.endswith("." + marker) for marker in SUPPORTED_HOST_MARKERS)
 
 
+def is_youtube_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower().lstrip("www.")
+    return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+
+
 def is_facebook_url(url: str) -> bool:
     host = (urlparse(url).hostname or "").lower().lstrip("www.")
     return host == "facebook.com" or host.endswith(".facebook.com") or host == "fb.watch"
