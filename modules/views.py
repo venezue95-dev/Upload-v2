@@ -20,6 +20,7 @@ from typing import List, Optional, Tuple
 
 from config import CONFIG
 from . import keyboards as K
+from . import logs as recent_logs
 from . import storage
 from . import texts as T
 from .queue import QUEUE, TaskStatus, UploadTask
@@ -235,6 +236,13 @@ def stats_view() -> View:
     return (
         T.stats_text(storage.global_stats(), storage.top_users(5), QUEUE.counts()),
         K.panel_keyboard(refresh="menu:stats", back=("Admin", "menu:admin")),
+    )
+
+
+def logs_view() -> View:
+    return (
+        T.logs_text(recent_logs.recent(40)),
+        K.panel_keyboard(refresh="menu:logs", back=("Admin", "menu:admin")),
     )
 
 

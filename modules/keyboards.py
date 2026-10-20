@@ -195,6 +195,7 @@ def admin_keyboard(paused: bool) -> Markup:
     return Markup([
         [Btn("📈 Estadísticas", callback_data="menu:stats"),
          Btn("🖥 Sistema", callback_data="menu:sys")],
+        [Btn("🧾 Logs", callback_data="menu:logs")],
         [Btn("🌍 Cola global", callback_data=cb_cola("g", 1)),
          Btn("⚙️ Ajustes", callback_data="menu:set")],
         [toggle],

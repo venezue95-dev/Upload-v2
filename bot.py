@@ -34,6 +34,7 @@ from pyrogram.enums import ParseMode
 
 from config import CONFIG
 from modules import keyboards as K
+from modules import logs as recent_logs
 from modules import notifier, storage
 from modules.handlers import admin, basic, callbacks, cola, media, settings, upload, url
 from modules import texts as T
@@ -53,6 +54,7 @@ def setup_logging() -> None:
         datefmt="%H:%M:%S",
     )
     logging.getLogger("pyrogram").setLevel(logging.WARNING)
+    recent_logs.install()
 
 
 def build_app() -> Client:

@@ -165,7 +165,7 @@ async def _menu(ctx: Ctx, args: list) -> None:
         await ctx.show(views.quota_view(ctx.user_id))
     elif action == "top":
         await ctx.show(views.top_view(ctx.user_id, is_owner_user=ctx.is_owner))
-    elif action in ("admin", "stats", "sys", "set"):
+    elif action in ("admin", "stats", "sys", "set", "logs"):
         if not await _owner_only(ctx):
             return
         if action == "admin":
@@ -175,6 +175,8 @@ async def _menu(ctx: Ctx, args: list) -> None:
         elif action == "sys":
             await ctx.answer("🖥 Leyendo recursos…")
             await ctx.show(await views.system_view())
+        elif action == "logs":
+            await ctx.show(views.logs_view())
         else:
             await ctx.show(views.settings_view(1, is_owner_user=True))
 

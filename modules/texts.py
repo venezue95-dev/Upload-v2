@@ -757,6 +757,23 @@ def stats_text(global_stats: dict, top: Sequence[dict], counts: dict) -> str:
     return cut("\n".join(lines))
 
 
+def logs_text(records: Sequence[str]) -> str:
+    """Panel de logs recientes visible únicamente para el owner."""
+    lines = [
+        "<b>🧾 Logs recientes</b>",
+        "",
+        "Se conservan solo mientras el bot está encendido; máximo 2000 registros.",
+        "Los mensajes pueden incluir ID de usuario, tarea, estado, errores y URL "
+        "de origen si el módulo la registra.",
+        "",
+    ]
+    if records:
+        lines.append("<pre>" + esc("\n".join(records[-35:])) + "</pre>")
+    else:
+        lines.append(i("Todavía no hay registros en memoria."))
+    return cut("\n".join(lines))
+
+
 def admin_text(counts: dict, paused: bool, maintenance: bool) -> str:
     flags = []
     if paused:
