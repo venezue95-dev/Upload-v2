@@ -167,7 +167,7 @@ def _require_yt_dlp():
 
 def _youtube_cookie_modes(url: str) -> tuple[bool, ...]:
     """Usa primero el flujo público de yt-dlp y deja las cookies como respaldo."""
-    if is_youtube_url(url) and _cookiefile_from_environment():
+    if is_youtube_url(url) and os.getenv("YTDLP_COOKIES", "").strip():
         return (False, True)
     return (True,)
 
