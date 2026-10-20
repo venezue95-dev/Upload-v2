@@ -99,10 +99,10 @@ async def resume_pending_tasks(client: Client) -> None:
         try:
             msg = await client.send_message(
                 task.chat_id,
-                T.premiumize(f"♻️ <b>Tarea reanudada</b> tras el reinicio del bot\n"
+                f"♻️ <b>Tarea reanudada</b> tras el reinicio del bot\n"
                 f"📄 {T.code(T.shorten(task.filename, 50))}\n"
                 f"🆔 {T.code(task.task_id)}\n"
-                f"{T.i('Sigue el progreso con /cola.')}") ,
+                f"{T.i('Sigue el progreso con /cola.')}",
                 reply_markup=K.task_message_keyboard(task),
             )
             # Desde ahora el progreso se muestra en este mensaje (el antiguo puede

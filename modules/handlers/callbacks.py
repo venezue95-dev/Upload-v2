@@ -25,7 +25,6 @@ from pyrogram.types import CallbackQuery
 from .. import actions
 from .. import keyboards as K
 from .. import storage, views
-from .. import texts as T
 from ..notifier import send_links_txt
 from ..queue import QUEUE
 from ..runtime_settings import RUNTIME_SETTINGS
@@ -64,7 +63,7 @@ class Ctx:
         text, keyboard = view
         try:
             await message.edit_text(
-                T.premiumize(text), parse_mode=ParseMode.HTML,
+                text, parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True, reply_markup=keyboard,
             )
         except Exception as exc:  # noqa: BLE001
@@ -184,7 +183,7 @@ async def _menu(ctx: Ctx, args: list) -> None:
                 for text, _keyboard in log_views[1:]:
                     await ctx.client.send_message(
                         chat_id,
-                        T.premiumize(text),
+                        text,
                         parse_mode=ParseMode.HTML,
                         disable_web_page_preview=True,
                     )

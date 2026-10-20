@@ -126,7 +126,7 @@ def username_of(user) -> str:
 async def reply(message: Message, text: str, keyboard: Optional[InlineKeyboardMarkup] = None) -> Optional[Message]:
     try:
         return await message.reply_text(
-            T.premiumize(text),
+            text,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
             reply_markup=keyboard,
@@ -139,7 +139,7 @@ async def reply(message: Message, text: str, keyboard: Optional[InlineKeyboardMa
 async def edit(message: Message, text: str, keyboard: Optional[InlineKeyboardMarkup] = None) -> bool:
     try:
         await message.edit_text(
-            T.premiumize(text),
+            text,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
             reply_markup=keyboard,

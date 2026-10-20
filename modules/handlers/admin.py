@@ -223,7 +223,6 @@ def _parse_user(raw: str) -> Optional[int]:
 async def _send_notice(client: Client, user_id: int, text: str) -> None:
     """Envía el anuncio; si Telegram pide esperar (FloodWait) espera y reintenta una vez."""
     body = f"📣 <b>Aviso del administrador</b>\n\n{T.esc(text)}"
-    body = T.premiumize(body)
     try:
         await client.send_message(user_id, body, parse_mode=ParseMode.HTML)
     except FloodWait as exc:

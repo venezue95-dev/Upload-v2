@@ -21,7 +21,6 @@ import time
 from typing import List, Optional, Sequence, TYPE_CHECKING
 
 from . import progress as P
-from .premium_emojis import premiumize
 from .queue import STATUS_ICON, STATUS_LABEL, TaskStatus
 
 if TYPE_CHECKING:  # pragma: no cover

@@ -168,7 +168,7 @@ async def retry_task(client, task: UploadTask) -> Tuple[bool, str]:
     task.retried_as = clone.task_id
     msg = await client.send_message(
         task.chat_id or task.user_id,
-        T.premiumize(T.retry_queued_text(clone, resumed)),
+        T.retry_queued_text(clone, resumed),
         parse_mode=ParseMode.HTML,
         reply_markup=K.task_message_keyboard(clone),
     )
