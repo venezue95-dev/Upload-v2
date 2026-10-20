@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import tempfile
 from typing import Callable, Dict, Optional
 from urllib.parse import urlparse
@@ -113,6 +114,11 @@ def _ydl_options(media_format: str, quality: str, *, output_dir: str,
         "writesubtitles": False,
         "postprocessors": [],
     }
+    # Desde las versiones actuales, el extractor de YouTube necesita EJS y un
+    # runtime JavaScript explícitamente habilitado. El Dockerfile proporciona
+    # Node; yt-dlp requiere que se indique aquí al usar la API de Python.
+    if shutil.which("node"):
+        opts["js_runtimes"] = {"node": {}}
     if media_format == "mp4":
         opts["merge_output_format"] = "mp4"
     if media_format in {"mp3", "opus", "wav"}:

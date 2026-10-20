@@ -14,7 +14,7 @@ requests>=2.25
 python-dotenv==1.0.1
 
 # Descargas multimedia explícitas (/descargar). FFmpeg se instala en Docker.
-yt-dlp[default,curl-cffi]>=2025.9.26
+yt-dlp[default,curl-cffi]>=2026.8.19
 
 # Google Play APK downloader (third_party/gplay-apk-downloader, GPLv3)
 gpapi>=0.4.4
