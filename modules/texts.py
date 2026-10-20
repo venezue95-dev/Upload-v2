@@ -757,20 +757,16 @@ def stats_text(global_stats: dict, top: Sequence[dict], counts: dict) -> str:
     return cut("\n".join(lines))
 
 
-def logs_text(records: Sequence[str]) -> str:
+def logs_text(records: Sequence[str], part: int = 1, total: int = 1) -> str:
     """Panel de logs recientes visible únicamente para el owner."""
     lines = [
-        "<b>🧾 Logs recientes</b>",
+        f"<b>🧾 Logs completos · parte {part}/{total}</b>",
         "",
-        "Se conservan solo mientras el bot está encendido; máximo 2000 registros.",
-        "Los mensajes pueden incluir ID de usuario, tarea, estado, errores y URL "
-        "de origen si el módulo la registra.",
+        "Hora: Cuba · archivo persistente: data/bot.log",
         "",
     ]
     if records:
-        lines.append("<pre>" + esc("\n".join(records[-35:])) + "</pre>")
-    else:
-        lines.append(i("Todavía no hay registros en memoria."))
+        lines.append("<pre>" + esc("\n".join(records)) + "</pre>")
     return cut("\n".join(lines))
 
 

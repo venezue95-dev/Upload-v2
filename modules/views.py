@@ -216,7 +216,7 @@ def quota_view(user_id: int) -> View:
 
 def top_view(user_id: int, *, is_owner_user: bool) -> View:
     return (
-        T.top_users_text(storage.top_users(10), viewer_id=user_id,
+        T.top_users_text(storage.top_users(), viewer_id=user_id,
                          is_owner_user=is_owner_user, owner_id=int(CONFIG.owner_id or 0)),
         K.panel_keyboard(refresh="menu:top"),
     )
@@ -234,16 +234,23 @@ def admin_view() -> View:
 
 def stats_view() -> View:
     return (
-        T.stats_text(storage.global_stats(), storage.top_users(5), QUEUE.counts()),
+        T.stats_text(storage.global_stats(), storage.top_users(), QUEUE.counts()),
         K.panel_keyboard(refresh="menu:stats", back=("Admin", "menu:admin")),
     )
 
 
 def logs_view() -> View:
-    return (
-        T.logs_text(recent_logs.recent(40)),
-        K.panel_keyboard(refresh="menu:logs", back=("Admin", "menu:admin")),
-    )
+    return logs_views()[0]
+
+
+def logs_views() -> List[View]:
+    groups = recent_logs.split_records(recent_logs.all_records())
+    total = len(groups)
+    views = []
+    for index, records in enumerate(groups, start=1):
+        keyboard = K.panel_keyboard(refresh="menu:logs", back=("Admin", "menu:admin")) if index == 1 else None
+        views.append((T.logs_text(records, index, total), keyboard))
+    return views
 
 
 def system_info() -> dict:

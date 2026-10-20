@@ -1113,14 +1113,28 @@ class QueueManager:
         self._refresh_positions()
         self._mark_dirty()
         self.wake()
-        log.info(
-            "[%s] ⏹ %s | %s | %.1f MB en %.0fs",
-            task.task_id,
-            task.status.value,
-            task.filename,
-            (task.bytes_transferred or task.bytes_fetched) / 1024 / 1024,
-            task.duration(),
-        )
+        size = int(task.file_size or task.bytes_transferred or task.bytes_fetched or 0)
+        if task.status == TaskStatus.COMPLETED:
+            log.info(
+                "[%s] ✅ subida completada | usuario=%s | archivo=%r | peso=%d bytes | "
+                "duracion=%.1fs | enlaces_enviados=%s",
+                task.task_id,
+                task.user_id,
+                task.filename,
+                size,
+                task.duration(),
+                " || ".join(task.urls or []) or "ninguno",
+            )
+        else:
+            log.info(
+                "[%s] ⏹ %s | usuario=%s | archivo=%r | peso=%d bytes | duracion=%.1fs",
+                task.task_id,
+                task.status.value,
+                task.user_id,
+                task.filename,
+                size,
+                task.duration(),
+            )
         if shutdown_pause:
             return
         # Avisar al notificador (import diferido para evitar ciclos).

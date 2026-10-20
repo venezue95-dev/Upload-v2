@@ -176,7 +176,17 @@ async def _menu(ctx: Ctx, args: list) -> None:
             await ctx.answer("🖥 Leyendo recursos…")
             await ctx.show(await views.system_view())
         elif action == "logs":
-            await ctx.show(views.logs_view())
+            log_views = views.logs_views()
+            await ctx.show(log_views[0])
+            if len(log_views) > 1:
+                chat_id = ctx.cq.message.chat.id
+                for text, _keyboard in log_views[1:]:
+                    await ctx.client.send_message(
+                        chat_id,
+                        text,
+                        parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=True,
+                    )
         else:
             await ctx.show(views.settings_view(1, is_owner_user=True))
 

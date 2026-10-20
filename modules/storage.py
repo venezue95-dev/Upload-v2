@@ -380,16 +380,14 @@ def global_stats() -> Dict[str, Any]:
     }
 
 
-def top_users(limit: int = 5) -> List[Dict[str, Any]]:
+def top_users(limit: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = _conn()
     with _LOCK:
-        rows = conn.execute(
-            """
-            SELECT user_id, username, uploads, bytes, failed
-            FROM users ORDER BY bytes DESC LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        query = "SELECT user_id, username, uploads, bytes, failed FROM users ORDER BY bytes DESC"
+        if limit is None:
+            rows = conn.execute(query).fetchall()
+        else:
+            rows = conn.execute(query + " LIMIT ?", (int(limit),)).fetchall()
     return [dict(r) for r in rows]
 
 

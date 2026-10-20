@@ -49,7 +49,7 @@ def register(app: Client) -> None:
             await reply(message, "👥 Todavía no hay usuarios registrados.")
             return
         lines = [f"<b>👥 Usuarios conocidos ({len(ids)})</b>", ""]
-        for user_id in ids[:40]:
+        for user_id in ids:
             stats = storage.user_stats(user_id) or {}
             active, waiting = QUEUE.user_load(user_id)
             who = stats.get("username") or ""
@@ -60,8 +60,6 @@ def register(app: Client) -> None:
                 f"{human_size(stats.get('bytes', 0))} en {stats.get('uploads', 0)} subidas"
                 + (f" · 🟢 {active} ⏳ {waiting}" if (active or waiting) else "")
             )
-        if len(ids) > 40:
-            lines.append(T.i(f"… y {len(ids) - 40} más"))
         await reply(message, T.cut("\n".join(lines)))
 
     @app.on_message(filters.command("anuncio") & OWNER)
