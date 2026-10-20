@@ -1114,8 +1114,9 @@ class QueueManager:
         self._mark_dirty()
         self.wake()
         size = int(task.file_size or task.bytes_transferred or task.bytes_fetched or 0)
+        from .logs import audit
         if task.status == TaskStatus.COMPLETED:
-            log.info(
+            audit.info(
                 "[%s] ✅ subida completada | usuario=%s | archivo=%r | peso=%d bytes | "
                 "duracion=%.1fs | enlaces_enviados=%s",
                 task.task_id,
@@ -1126,7 +1127,7 @@ class QueueManager:
                 " || ".join(task.urls or []) or "ninguno",
             )
         else:
-            log.info(
+            audit.info(
                 "[%s] ⏹ %s | usuario=%s | archivo=%r | peso=%d bytes | duracion=%.1fs",
                 task.task_id,
                 task.status.value,

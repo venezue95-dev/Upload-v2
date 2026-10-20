@@ -774,7 +774,7 @@ def logs_text(records: Sequence[str], part: int = 1, total: int = 1) -> str:
     lines = [
         f"<b>🧾 Logs completos · parte {part}/{total}</b>",
         "",
-        "Hora: Cuba · archivo persistente: data/bot.log",
+        "Hora: Cuba · archivo persistente: data/audit.log",
         "",
     ]
     if records:

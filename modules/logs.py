@@ -3,8 +3,8 @@ logs.py
 =======
 Registro persistente para el panel de administración.
 
-Los eventos se guardan en data/bot.log con hora de Cuba y se pueden consultar
-completos desde Telegram, divididos en mensajes si superan el límite.
+Los eventos de auditoría se guardan en data/audit.log con hora de Cuba y se
+pueden consultar completos desde Telegram, divididos en mensajes si superan el límite.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ _MAX_MEMORY_RECORDS = 2000
 _MEMORY = deque(maxlen=_MAX_MEMORY_RECORDS)
 _LOCK = threading.RLock()
 _CUBA = ZoneInfo("America/Havana")
-_LOG_PATH = os.path.join(CONFIG.data_dir, "bot.log")
+_LOG_PATH = os.path.join(CONFIG.data_dir, "audit.log")
 
 
 class CubaFormatter(logging.Formatter):
@@ -61,10 +61,15 @@ _HANDLER.setFormatter(CubaFormatter(
 
 
 def install() -> None:
-    """Instala el registro persistente una sola vez en el logger raíz."""
-    root = logging.getLogger()
-    if _HANDLER not in root.handlers:
-        root.addHandler(_HANDLER)
+    """Instala el handler solo para eventos explícitos de auditoría."""
+    audit_logger = logging.getLogger("s3_bot.audit")
+    audit_logger.setLevel(logging.INFO)
+    audit_logger.propagate = False
+    if _HANDLER not in audit_logger.handlers:
+        audit_logger.addHandler(_HANDLER)
+
+
+audit = logging.getLogger("s3_bot.audit")
 
 
 def all_records() -> List[str]:

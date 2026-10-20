@@ -118,7 +118,11 @@ async def handle_callback(ctx, args: list[str]) -> None:
         return
     from ..queue import QUEUE
     QUEUE.touch_rate_limit(ctx.user_id)
-    suffix = f"{quality}p" if media_format == "mp4" and quality != "max" else quality
+    suffix = (
+        f"{quality}p" if media_format == "mp4" and quality != "max"
+        else "audio" if media_format in {"mp3", "m4a", "opus", "wav"}
+        else quality
+    )
     await ctx.show((
         f"✅ <b>Descarga encolada</b>\n\nFormato: <code>{media_format.upper()}</code> · "
         f"Calidad: <code>{suffix}</code>",
