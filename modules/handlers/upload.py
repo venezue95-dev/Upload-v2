@@ -1,7 +1,7 @@
 """
 upload.py
 =========
-Handler de archivos enviados por Telegram (documento, vídeo, audio, voz).
+Handler de archivos enviados por Telegram (documento, video, audio, voz).
 
 Ya NO descarga ni sube nada aquí: solo valida, comprueba cupos y encola.
 El trabajo lo hacen los trabajadores de la cola (modules/pipeline.py), de

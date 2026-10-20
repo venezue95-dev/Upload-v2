@@ -50,7 +50,7 @@ async def offer_media_options(message: Message, url: str) -> None:
     await reply(
         message,
         "📥 <b>Enlace multimedia detectado</b>\n\n"
-        "Elige el formato de descarga. Para vídeo aparecerán las calidades disponibles.",
+        "Elige el formato de descarga. Para video aparecerán las calidades disponibles.",
         K.media_format_keyboard(token),
     )
 
@@ -75,10 +75,10 @@ async def handle_callback(ctx, args: list[str]) -> None:
         return
     _, message, url, _, qualities = item
     if action == "format" and value == "mp4" and (is_facebook_url(url) or is_youtube_url(url)):
-        await ctx.answer("Elige la calidad de vídeo")
+        await ctx.answer("Elige la calidad de video")
         await ctx.show((
-            "🎬 <b>Elige la calidad de vídeo</b>\n\n"
-            "Las opciones corresponden a las calidades disponibles para este vídeo.",
+            "🎬 <b>Elige la calidad de video</b>\n\n"
+            "Las opciones corresponden a las calidades disponibles para este video.",
             K.media_quality_keyboard(token, qualities if is_youtube_url(url) else None),
         ))
         return
@@ -91,7 +91,7 @@ async def handle_callback(ctx, args: list[str]) -> None:
         return
     elif action == "quality":
         if is_youtube_url(url) and value != "max" and value not in qualities:
-            await ctx.answer("Esa calidad no está disponible para este vídeo.", alert=True)
+            await ctx.answer("Esa calidad no está disponible para este video.", alert=True)
             return
         media_format = "mp4"
         quality = value
@@ -179,6 +179,6 @@ def _usage() -> str:
         "<code>/descargar URL mp4 1080</code>\n"
         "<code>/descargar URL mp3</code>\n\n"
         "Formatos: mp4, mp3, m4a, opus o wav.\n"
-        "Calidades de vídeo: 360, 480, 720, 1080, 1440, 2160 o max.\n"
+        "Calidades de video: 360, 480, 720, 1080, 1440, 2160 o max.\n"
         "La calidad exacta depende del contenido y de la plataforma."
     )
