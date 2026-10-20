@@ -80,7 +80,7 @@ def register(app: Client) -> None:
             view = await views.status_view(client)
             if note is not None:
                 text, keyboard = view
-                await note.edit_text(text, reply_markup=keyboard,
+                await note.edit_text(T.premiumize(text), reply_markup=keyboard,
                                      disable_web_page_preview=True)
 
         spawn(work())     # el sondeo a toDus puede tardar hasta 12 s

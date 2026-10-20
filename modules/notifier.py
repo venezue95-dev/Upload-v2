@@ -174,7 +174,7 @@ async def edit_status(task: UploadTask, text: str, keyboard=None) -> bool:
         await _client.edit_message_text(
             task.chat_id,
             task.status_message_id,
-            text,
+            T.premiumize(text),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
             reply_markup=keyboard,
@@ -207,7 +207,7 @@ async def send_status(task: UploadTask, text: str, keyboard=None) -> None:
     try:
         msg = await _client.send_message(
             task.chat_id,
-            text,
+            T.premiumize(text),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
             reply_markup=keyboard,
@@ -255,13 +255,13 @@ async def _log_to_channel(task: UploadTask) -> None:
 
         await _client.send_message(
             channel,
-            f"📤 <b>Nueva subida</b>\n"
+            T.premiumize(f"📤 <b>Nueva subida</b>\n"
             f"👤 {T.esc(who)} ({T.code(str(task.user_id))})\n"
             f"📄 {T.code(T.shorten(task.filename, 50))}\n"
             f"📦 {P.human_size(task.file_size)} · 🧩 {task.parts_total} parte(s)\n"
             f"⏱️ {P.human_time(task.duration())} · media "
             f"{P.human_speed(task.avg_speed())}\n"
-            f"🆔 {T.code(task.task_id)}",
+            f"🆔 {T.code(task.task_id)}"),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
@@ -281,11 +281,11 @@ async def _alert_owner(task: UploadTask) -> None:
     try:
         await _client.send_message(
             CONFIG.owner_id,
-            f"⚠️ <b>Tarea fallida</b>\n"
+            T.premiumize(f"⚠️ <b>Tarea fallida</b>\n"
             f"👤 {T.esc(who)} ({task.user_id})\n"
             f"📄 {T.code(T.shorten(task.filename, 40))}\n"
             f"🆔 {T.code(task.task_id)}\n"
-            f"❗️ {T.esc(T.shorten(task.error or 'sin detalle', 200))}",
+            f"❗️ {T.esc(T.shorten(task.error or 'sin detalle', 200))}"),
             parse_mode=ParseMode.HTML,
         )
     except Exception as exc:  # noqa: BLE001
@@ -315,11 +315,12 @@ async def send_links_txt(client, chat_id: int, task: UploadTask) -> None:
         await client.send_document(
             chat_id,
             path,
-            caption=(
+            caption=T.premiumize(
+                (
                 f"📄 <b>Enlaces ({len(task.urls)})</b>\n"
                 f"{T.code(T.shorten(task.filename, 40))}\n"
                 f"{T.i('Cada línea es una parte, en orden. Únelas para reconstruir el archivo.')}"
-            ),
+                )),
             parse_mode=ParseMode.HTML,
         )
     except Exception as exc:  # noqa: BLE001
