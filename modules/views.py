@@ -97,7 +97,8 @@ def queue_view(user_id: int, scope: str, page: int, *, is_owner_user: bool) -> V
     pages = max(1, (len(tasks) + QUEUE_PER_PAGE - 1) // QUEUE_PER_PAGE)
     page = max(1, min(page, pages))
     return (
-        T.queue_text(user_id, tasks, page, QUEUE_PER_PAGE, global_view=global_view),
+        T.queue_text(user_id, tasks, page, QUEUE_PER_PAGE, global_view=global_view,
+                     owner_id=int(CONFIG.owner_id or 0)),
         K.queue_keyboard(tasks, page, QUEUE_PER_PAGE, scope=scope, is_owner_user=is_owner_user),
     )
 
@@ -156,7 +157,7 @@ def card_view(task: UploadTask, ctx: str, viewer_id: int, *, manage: bool) -> Vi
     foreign = manage and task.user_id != viewer_id
     can_drop = manage and QUEUE.get(task.task_id) is task
     return (
-        T.task_card_text(task, show_user=foreign),
+        T.task_card_text(task, show_user=foreign, owner_id=int(CONFIG.owner_id or 0)),
         K.task_card_keyboard(task, ctx, can_drop=can_drop),
     )
 
@@ -206,10 +207,11 @@ async def status_view(client) -> View:
     )
 
 
-def quota_view(user_id: int) -> View:
+def quota_view(user_id: int, *, is_owner_user: bool = False) -> View:
     limit = int(RUNTIME_SETTINGS.get("daily_quota_mb", 0) or 0) * 1024 * 1024
     return (
-        T.quota_text(used=storage.bytes_today(user_id), limit=limit),
+        T.quota_text(used=storage.bytes_today(user_id), limit=limit,
+                     is_owner_user=is_owner_user),
         K.panel_keyboard(refresh="menu:quota"),
     )
 
@@ -234,7 +236,8 @@ def admin_view() -> View:
 
 def stats_view() -> View:
     return (
-        T.stats_text(storage.global_stats(), storage.top_users(), QUEUE.counts()),
+        T.stats_text(storage.global_stats(), storage.top_users(), QUEUE.counts(),
+                     owner_id=int(CONFIG.owner_id or 0)),
         K.panel_keyboard(refresh="menu:stats", back=("Admin", "menu:admin")),
     )
 

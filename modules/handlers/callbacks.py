@@ -162,7 +162,7 @@ async def _menu(ctx: Ctx, args: list) -> None:
         await ctx.answer("🔍 Comprobando…")
         await ctx.show(await views.status_view(ctx.client))
     elif action == "quota":
-        await ctx.show(views.quota_view(ctx.user_id))
+        await ctx.show(views.quota_view(ctx.user_id, is_owner_user=ctx.is_owner))
     elif action == "top":
         await ctx.show(views.top_view(ctx.user_id, is_owner_user=ctx.is_owner))
     elif action in ("admin", "stats", "sys", "set", "logs"):

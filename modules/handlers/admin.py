@@ -52,7 +52,7 @@ def register(app: Client) -> None:
         for user_id in ids:
             stats = storage.user_stats(user_id) or {}
             active, waiting = QUEUE.user_load(user_id)
-            who = stats.get("username") or ""
+            who = "Admin 👑" if user_id == CONFIG.owner_id else (stats.get("username") or "")
             from ..progress import human_size
 
             lines.append(

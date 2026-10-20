@@ -158,7 +158,9 @@ def mask_id(user_id) -> str:
     return "…" + str(user_id)[-4:]
 
 
-def who(task: "UploadTask") -> str:
+def who(task: "UploadTask", owner_id: int = 0) -> str:
+    if owner_id and task.user_id == owner_id:
+        return "Admin 👑"
     return f"@{task.username}" if task.username else str(task.user_id)
 
 
@@ -187,7 +189,7 @@ def status_badge(status: TaskStatus) -> str:
 
 
 def task_line(task: "UploadTask", index: Optional[int] = None,
-              show_user: bool = False) -> str:
+              show_user: bool = False, owner_id: int = 0) -> str:
     head = f"{index}. " if index is not None else ""
     line = (
         f"{head}{STATUS_ICON.get(task.status, '❔')} "
@@ -195,7 +197,7 @@ def task_line(task: "UploadTask", index: Optional[int] = None,
         f"<i>({P.human_size_compact(task.file_size)})</i>"
     )
     if show_user:
-        line += f" · {esc(who(task))}"
+        line += f" · {esc(who(task, owner_id))}"
     extra: List[str] = []
     if task.parts_total > 1:
         extra.append(f"🧩 {task.parts_done}/{task.parts_total}")
@@ -510,7 +512,7 @@ def retry_queued_text(clone: "UploadTask", resumed: int = 0) -> str:
     return cut("\n".join(lines))
 
 
-def task_card_text(task: "UploadTask", *, show_user: bool = False) -> str:
+def task_card_text(task: "UploadTask", *, show_user: bool = False, owner_id: int = 0) -> str:
     """Ficha completa de una tarea (se abre desde /cola y /historial)."""
     lines = [
         f"<b>{STATUS_ICON.get(task.status, '❔')} Ficha de la tarea</b>",
@@ -520,7 +522,7 @@ def task_card_text(task: "UploadTask", *, show_user: bool = False) -> str:
         f"📦 {esc(P.human_size_compact(task.file_size))}",
     ]
     if show_user:
-        lines.append(f"👤 {esc(who(task))}")
+        lines.append(f"👤 {esc(who(task, owner_id))}")
     lines.append(
         f"🧭 Estado: {esc(STATUS_LABEL.get(task.status, task.status.value))}"
         + (f" · {esc(task.phase)}" if task.phase and task.status.is_active else "")
@@ -549,7 +551,7 @@ def task_card_text(task: "UploadTask", *, show_user: bool = False) -> str:
 # /cola
 # ----------------------------------------------------------------------
 def queue_text(user_id: int, tasks: Sequence["UploadTask"], page: int,
-               per_page: int, *, global_view: bool = False) -> str:
+               per_page: int, *, global_view: bool = False, owner_id: int = 0) -> str:
     total_pages = max(1, (len(tasks) + per_page - 1) // per_page)
     page = max(1, min(page, total_pages))
     chunk = tasks[(page - 1) * per_page : page * per_page]
@@ -565,7 +567,7 @@ def queue_text(user_id: int, tasks: Sequence["UploadTask"], page: int,
     title = "<b>🌍 Cola global</b>" if global_view else "<b>📋 Tus tareas</b>"
     lines = [title, ""]
     for idx, task in enumerate(chunk, start=1 + (page - 1) * per_page):
-        lines.append(task_line(task, index=idx, show_user=global_view))
+        lines.append(task_line(task, index=idx, show_user=global_view, owner_id=owner_id))
         lines.append("")
 
     summary = _queue_summary_line(tasks)
@@ -684,7 +686,14 @@ def status_text(*, bot_line: str, storage_line: str, settings, counts: dict,
     )
 
 
-def quota_text(*, used: int, limit: int) -> str:
+def quota_text(*, used: int, limit: int, is_owner_user: bool = False) -> str:
+    if is_owner_user:
+        return cut(
+            "<b>📊 Mi cuota</b>\n\n"
+            "• Límite: <b>sin límite</b>\n"
+            "• Rol: <b>administrador</b>\n\n"
+            + i("El administrador está exento de la cuota diaria.")
+        )
     if limit <= 0:
         return cut(
             "<b>📊 Mi cuota</b>\n\n"
@@ -715,8 +724,10 @@ def top_users_text(rows: Sequence[dict], *, viewer_id: int = 0,
     else:
         for idx, row in enumerate(rows, start=1):
             uid = int(row.get("user_id", 0) or 0)
-            marker = " 👑" if uid and uid == owner_id else ""
-            if uid == viewer_id:
+            marker = ""
+            if uid and uid == owner_id:
+                label, marker = "Admin", " 👑"
+            elif uid == viewer_id:
                 label, marker = "tú", marker + " ⭐"
             else:
                 label = str(uid) if is_owner_user else mask_id(uid)
@@ -730,7 +741,7 @@ def top_users_text(rows: Sequence[dict], *, viewer_id: int = 0,
     return cut("\n".join(lines))
 
 
-def stats_text(global_stats: dict, top: Sequence[dict], counts: dict) -> str:
+def stats_text(global_stats: dict, top: Sequence[dict], counts: dict, *, owner_id: int = 0) -> str:
     lines = [
         "<b>📈 Estadísticas globales</b>",
         "",
@@ -749,7 +760,8 @@ def stats_text(global_stats: dict, top: Sequence[dict], counts: dict) -> str:
     if top:
         lines += ["", "<b>🏆 Top usuarios por datos subidos</b>"]
         for idx, row in enumerate(top, start=1):
-            name = row["username"] or str(row["user_id"])
+            uid = int(row.get("user_id", 0) or 0)
+            name = "Admin 👑" if uid == owner_id else (row["username"] or str(uid))
             lines.append(
                 f"{idx}. {code(shorten(name, 20))} — {P.human_size(row['bytes'])} "
                 f"({row['uploads']} subidas)"
