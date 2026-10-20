@@ -378,6 +378,13 @@ class UploadTask:
         self._live_meter.reset()
         self.speed = 0.0
 
+    def begin_upload_phase(self) -> None:
+        """Separa el progreso visual de descarga del progreso de subida."""
+        with self._lock:
+            self._processed_peak = 0
+        self._live_meter.reset()
+        self.speed = 0.0
+
     def mark_finished(self, status: TaskStatus, error: Optional[str] = None) -> None:
         self.status = status
         self.error = error

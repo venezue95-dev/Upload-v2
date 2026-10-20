@@ -420,6 +420,7 @@ async def _run_classic(client, task: UploadTask, source: dict, chunk_bytes: int,
                                  folder=task.resume_folder)
     task.s3_base = base_name
     task.plan_parts(chunk_bytes, len(parts))
+    task.begin_upload_phase()
     task.status = TaskStatus.UPLOADING
     task.phase = "Subiendo"
 
