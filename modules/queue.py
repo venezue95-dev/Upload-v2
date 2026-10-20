@@ -504,7 +504,9 @@ class UploadTask:
 
         if self.status == TaskStatus.DOWNLOADING:
             remaining = max(0, total - self.bytes_fetched)
-            speed = self.download_speed or self.upload_speed
+            # No reutilizar la estimación de subida: hasta que la descarga
+            # tenga muestras reales, el texto debe mostrar "calculando…".
+            speed = self.download_speed
             if speed <= 0:
                 return None
             return remaining / speed
