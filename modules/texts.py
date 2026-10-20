@@ -327,7 +327,7 @@ def sites_text() -> str:
         "✅ Instagram · TikTok · Facebook · Dailymotion\n"
         "✅ Vimeo · Twitch · Reddit · SoundCloud · Bilibili\n"
         "✅ Rumble · Pinterest · Streamable\n"
-        "✅ YouTube está habilitado mediante yt-dlp.\n\n"
+        "🚫 YouTube está desactivado actualmente.\n\n"
         "<b>🔗 Enlaces directos</b>\n"
         "✅ Cualquier URL http(s) que entregue directamente un archivo.\n\n"
         "<b>🧪 Soporte experimental</b>\n"

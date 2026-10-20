@@ -24,7 +24,7 @@ from pyrogram.types import Message
 
 from .. import texts as T
 from .. import keyboards as K
-from ..media_downloader import is_facebook_url, is_media_url, normalize_options
+from ..media_downloader import is_blocked_media_url, is_facebook_url, is_media_url, normalize_options
 from .common import AUTHORIZED, check_limits, enqueue, reply
 
 log = logging.getLogger("s3_bot.media_handler")
@@ -130,6 +130,9 @@ def register(app: Client) -> None:
             media_format, quality = normalize_options(media_format, quality)
         except ValueError as exc:
             await reply(message, f"⛔️ {T.esc(str(exc))}\n\n{_usage()}")
+            return
+        if is_blocked_media_url(url):
+            await reply(message, "ℹ️ Las descargas de YouTube están desactivadas temporalmente.")
             return
         if not is_media_url(url):
             await reply(message, "⛔️ Ese dominio no está habilitado para descargas multimedia.")
