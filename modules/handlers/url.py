@@ -20,7 +20,7 @@ from pyrogram.types import Message
 
 from .. import texts as T
 from ..downloader import acheck_url, probe_url, url_to_filename
-from ..media_downloader import is_blocked_media_url, is_media_url
+from ..media_downloader import is_media_url
 from ..playstore_downloader import is_play_store_url, package_from_url
 from ..queue import QUEUE
 from ..runtime_settings import RUNTIME_SETTINGS
@@ -70,12 +70,6 @@ async def _enqueue_single(client: Client, message: Message, url: str) -> None:
     ok, why = await acheck_url(url)
     if not ok:
         await reply(message, f"<b>⛔️ Enlace no válido</b>\n\n{T.esc(why)}")
-        return
-
-    if is_blocked_media_url(url):
-        await reply(message, "<b>ℹ️ YouTube no está disponible</b>\n\n"
-                            "Las descargas de YouTube fueron desactivadas temporalmente. "
-                            "Puedes utilizar Instagram, TikTok, Facebook y las demás plataformas habilitadas.")
         return
 
     duplicate = QUEUE.find_duplicate_url(user_id, url)
@@ -145,8 +139,6 @@ async def _enqueue_many(client: Client, message: Message, urls: List[str]) -> No
     for url, (ok, why) in zip(urls, checks):
         if not ok:
             rejected.append(f"⛔️ {T.code(T.shorten(url, 44))} — {T.i(T.shorten(why, 40))}")
-        elif is_blocked_media_url(url):
-            rejected.append(f"ℹ️ {T.code(T.shorten(url, 44))} — {T.i('YouTube está desactivado')}")
         elif QUEUE.find_duplicate_url(user_id, url):
             rejected.append(f"♻️ {T.code(T.shorten(url, 44))} — {T.i('ya en cola')}")
         else:

@@ -3,9 +3,9 @@ media_downloader.py
 ===================
 Adaptador pequeño y controlado para yt-dlp.
 
-No acepta cookies de usuarios ni URLs arbitrarias fuera del comando explícito
-/descargar. El bot usa este módulo para obtener metadatos y generar un archivo
-local que luego pasa por el pipeline normal de toDus.
+Las cookies, si se configuran, se pasan a yt-dlp mediante ``cookiefile``.
+El bot usa el extractor estándar de yt-dlp para obtener metadatos y generar un
+archivo local que luego pasa por el pipeline normal de toDus.
 """
 
 from __future__ import annotations
@@ -23,12 +23,12 @@ from .queue import TaskCancelled, UploadTask
 log = logging.getLogger("s3_bot.media")
 
 SUPPORTED_HOST_MARKERS = (
+    "youtube.com", "youtu.be",
     "instagram.com", "tiktok.com", "vm.tiktok.com",
     "facebook.com", "fb.watch", "twitter.com", "x.com", "vimeo.com",
     "twitch.tv", "reddit.com", "soundcloud.com", "dailymotion.com",
     "bilibili.com", "rumble.com", "pinterest.com", "streamable.com",
 )
-BLOCKED_HOST_MARKERS = ("youtube.com", "youtu.be")
 FORMATS = {"mp4", "mp3", "m4a", "opus", "wav"}
 QUALITIES = {"144", "240", "360", "480", "720", "1080", "1440", "2160", "max"}
 
@@ -36,11 +36,6 @@ QUALITIES = {"144", "240", "360", "480", "720", "1080", "1440", "2160", "max"}
 def is_media_url(url: str) -> bool:
     host = (urlparse(url).hostname or "").lower().lstrip("www.")
     return any(host == marker or host.endswith("." + marker) for marker in SUPPORTED_HOST_MARKERS)
-
-
-def is_blocked_media_url(url: str) -> bool:
-    host = (urlparse(url).hostname or "").lower().lstrip("www.")
-    return any(host == marker or host.endswith("." + marker) for marker in BLOCKED_HOST_MARKERS)
 
 
 def is_facebook_url(url: str) -> bool:
