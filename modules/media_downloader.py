@@ -118,10 +118,14 @@ def _ydl_options(media_format: str, quality: str, *, output_dir: str,
         opts["skip_download"] = True
     if url and is_youtube_url(url):
         # YouTube puede seleccionar tv_downgraded y responder "The page needs
-        # to be reloaded" aunque las cookies sean válidas. Estos clientes
-        # evitan esa ruta y mantienen web_safari como primera opción.
+        # to be reloaded" aunque las cookies sean válidas. android_vr suele
+        # conservar pistas de audio cuando web_safari solo entrega SABR/HLS.
         opts["extractor_args"] = {
-            "youtube": {"player_client": ["web_safari", "web_embedded", "-tv_downgraded"]}
+            "youtube": {
+                "player_client": [
+                    "android_vr", "web_safari", "web_embedded", "-tv_downgraded"
+                ]
+            }
         }
     cookiefile = _cookiefile_from_environment()
     if cookiefile:
