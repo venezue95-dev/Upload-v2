@@ -31,7 +31,7 @@ from config import CONFIG
 from . import keyboards as K
 from . import notifier
 from . import storage
-from .media_downloader import download_media, is_media_url, probe_media
+from .media_downloader import download_media, is_media_url, is_playlist_url, probe_media
 from .playstore_downloader import download_play_store, package_from_url
 from . import texts as T
 from .downloader import (
@@ -215,13 +215,20 @@ async def _resolve_source(client, task: UploadTask) -> dict:
             raise RuntimeError(f"URL rechazada: {why}")
         if not is_media_url(url):
             raise RuntimeError("el dominio no está habilitado para descargas multimedia")
+        if is_playlist_url(url):
+            raise RuntimeError("envía el enlace de un video individual, no una lista")
         info = await asyncio.to_thread(
             probe_media, url, task.media_format, task.media_quality
         )
+        if info.get("is_live"):
+            raise RuntimeError("las transmisiones en vivo no están disponibles para descarga")
+        if info.get("is_playlist"):
+            raise RuntimeError("los enlaces de listas deben apuntar a un video individual")
         return {
             "kind": "media",
             "url": url,
             "size": int(info.get("size") or 0),
+            "duration": int(info.get("duration") or 0),
             "name": info.get("filename") or task.filename,
             "ranges": False,
             "media": None,
@@ -302,6 +309,12 @@ async def _run_stream(client, task: UploadTask, source: dict, chunk_bytes: int,
             await _upload_part(task, part, tmp)
         finally:
             _remove(tmp)
+
+    # Las partes reanudadas ya estaban subidas: cuentan como descargadas para
+    # que la barra de bajada no se quede por debajo del 100 %.
+    for part in parts:
+        if part.number in task.resumed_parts:
+            task.part_fetched_done(part.number, part.length)
 
     await _run_parts(task, parts, process, per_task, skip=set(task.resumed_parts))
 
@@ -438,6 +451,7 @@ async def _upload_part(task: UploadTask, part, tmp_path: str) -> None:
     if task.is_cancelled:
         raise TaskCancelled("cancelada por el usuario")
 
+    task.upload_reports_bytes = s3().reports_progress
     task.part_started(part.number)
     started = time.monotonic()
     loop = asyncio.get_running_loop()
@@ -482,7 +496,12 @@ def _upload_sync(tmp_path: str, key: str, filename: str, task: UploadTask,
     """
     verify = RUNTIME_SETTINGS.get("verify_upload", True)
     for attempt in (1, 2):
-        s3().upload_part(tmp_path, key, filename, task, label)
+        task.reset_part_upload(part_number)      # intento nuevo → vuelve a contar desde 0
+        s3().upload_part(
+            tmp_path, key, filename, task, label,
+            progress=lambda sent: task.note_uploaded(part_number, sent),
+            on_attempt=lambda: task.reset_part_upload(part_number),
+        )
         if not verify:
             break
         ok, detail = s3().verify_part(key, expected_size)

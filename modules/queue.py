@@ -150,6 +150,7 @@ class UploadTask:
         self.parallel_parts = max(1, int(RUNTIME_SETTINGS.get("max_parallel") or 1))
         self._inflight: Dict[int, float] = {}   # parte -> t0 (monotonic)
         self._part_fetched: Dict[int, int] = {}  # parte -> bytes descargados
+        self._part_uploaded: Dict[int, int] = {} # parte -> bytes enviados
         self._fetched_total = 0                  # descarga completa (modo clásico)
         self._processed_peak = 0                 # progreso monótono
         self._lock = threading.Lock()
@@ -158,6 +159,10 @@ class UploadTask:
         # La subida se mide por partes (el PUT no informa bytes intermedios):
         # si no hay medición propia se usa la velocidad global aprendida.
         self._upload_meter = RateMeter(prior_fn=SPEEDS.upload_estimate)
+        # Si el backend informa bytes enviados en vivo, la velocidad de subida
+        # se mide sobre el total real (suma de todas las partes en vuelo).
+        self.upload_reports_bytes = False
+        self._live_meter = SpeedMeter()
         self.speed = 0.0
         self._mono_start = time.monotonic()
 
@@ -226,13 +231,27 @@ class UploadTask:
 
     @property
     def upload_speed(self) -> float:
-        """Velocidad de subida: medida por partes o estimada (RateMeter)."""
+        """
+        Velocidad de subida (bytes/s del total de partes en paralelo).
+
+        Con bytes en vivo se usa la medición real; si no, la medida por partes
+        terminadas o, en su defecto, la estimación global aprendida.
+        """
+        if self.upload_reports_bytes and self._live_meter.speed > 0:
+            return self._live_meter.speed
         return self._upload_meter.value()
 
     @property
     def upload_speed_measured(self) -> bool:
         """True si la velocidad de subida ya tiene mediciones reales."""
+        if self.upload_reports_bytes and self._live_meter.speed > 0:
+            return True
         return self._upload_meter.measured
+
+    def uploaded_bytes_exact(self) -> int:
+        """Bytes realmente enviados: partes terminadas + bytes de partes en vuelo."""
+        with self._lock:
+            return int(self.bytes_transferred + sum(self._part_uploaded.values()))
 
     @property
     def download_speed(self) -> float:
@@ -256,6 +275,30 @@ class UploadTask:
     def part_started(self, part_number: int) -> None:
         with self._lock:
             self._inflight[part_number] = time.monotonic()
+            self._part_uploaded[part_number] = 0
+
+    def note_uploaded(self, part_number: int, sent: int) -> None:
+        """
+        Bytes enviados de una parte en el intento actual.
+
+        Se limita a la longitud esperada de la parte (nunca cuenta de más) y
+        solo se admite en partes que siguen en vuelo: un callback tardío de
+        una parte ya terminada no debe volver a sumar.
+        """
+        with self._lock:
+            if part_number not in self._inflight:
+                return
+            value = max(0, int(sent or 0))
+            length = self.expected_part_length(part_number)
+            if length > 0:
+                value = min(value, length)
+            self._part_uploaded[part_number] = value
+
+    def reset_part_upload(self, part_number: int) -> None:
+        """Un reintento de la parte empieza otra vez desde 0 bytes enviados."""
+        with self._lock:
+            if part_number in self._inflight:
+                self._part_uploaded[part_number] = 0
 
     def part_finished(self, part_number: int, length: int, seconds: float = 0.0) -> None:
         """Marca una parte como subida y alimenta el velocímetro de subida."""
@@ -263,6 +306,7 @@ class UploadTask:
             started = self._inflight.pop(part_number, None)
             self.parts_done += 1
             self.bytes_transferred += max(0, length)
+            self._part_uploaded.pop(part_number, None)
         if length > 0:
             elapsed = seconds or ((time.monotonic() - started) if started else 0.0)
             rate = self._upload_meter.note(length, elapsed)
@@ -273,6 +317,7 @@ class UploadTask:
     def part_failed(self, part_number: int) -> None:
         with self._lock:
             self._inflight.pop(part_number, None)
+            self._part_uploaded.pop(part_number, None)
 
     # --- descarga por partes (modo streaming) ---
     def note_fetched(self, part_number: int, written: int) -> None:
@@ -311,6 +356,7 @@ class UploadTask:
         self._meter.reset()
         self._download_meter.reset()
         self._upload_meter.reset()
+        self._live_meter.reset()
         self._processed_peak = 0
         self.speed = 0.0
 
@@ -319,6 +365,7 @@ class UploadTask:
         with self._lock:
             self._inflight.clear()
             self._part_fetched.clear()
+            self._part_uploaded.clear()
             self._fetched_total = 0
             self.bytes_transferred = 0
             self.parts_done = 0
@@ -328,6 +375,7 @@ class UploadTask:
         self._meter.reset()
         self._download_meter.reset()
         self._upload_meter.reset()
+        self._live_meter.reset()
         self.speed = 0.0
 
     def mark_finished(self, status: TaskStatus, error: Optional[str] = None) -> None:
@@ -350,6 +398,8 @@ class UploadTask:
             return self.speed
         mono = time.monotonic()
         self._download_meter.update(self.bytes_fetched, mono)
+        if self.upload_reports_bytes:
+            self._live_meter.update(self.uploaded_bytes_exact(), mono)
         self.speed = self.current_speed()
         return self.speed
 
@@ -374,14 +424,19 @@ class UploadTask:
         """
         if not self.parts_total:
             return 0.0
+        if self.upload_reports_bytes:
+            return 0.0      # hay bytes reales: no se inventa nada
         speed = self.upload_speed
         if speed <= 0:
             return 0.0
         now = time.monotonic()
         with self._lock:
             inflight = dict(self._inflight)
+            uploaded_by_part = dict(self._part_uploaded)
         credit = 0.0
         for part_number, t0 in inflight.items():
+            if uploaded_by_part.get(part_number, 0) > 0:
+                continue
             length = self.expected_part_length(part_number)
             if length <= 0:
                 continue
@@ -393,7 +448,9 @@ class UploadTask:
         if self.status == TaskStatus.DOWNLOADING and self.mode != "stream":
             value = int(self.bytes_fetched)
         else:
-            value = int(self.bytes_transferred + self._inflight_credit())
+            with self._lock:
+                uploaded = sum(self._part_uploaded.values())
+            value = int(self.bytes_transferred + uploaded + self._inflight_credit())
         if value > self._processed_peak:
             self._processed_peak = value
         return self._processed_peak
@@ -448,6 +505,9 @@ class UploadTask:
         speed = self.upload_speed
         if speed <= 0:
             return None
+        if self.upload_reports_bytes and self._live_meter.speed > 0:
+            # La velocidad medida ya es el total de todas las partes en paralelo.
+            return remaining_upload / speed
         return self._waves_seconds(remaining_upload, speed)
 
     def _waves_seconds(self, remaining: float, speed: float) -> float:

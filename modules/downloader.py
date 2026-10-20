@@ -258,6 +258,10 @@ def download_url_range(
                 raise RuntimeError("el alojamiento devolvió una página HTML en vez del archivo")
             total = int(r.headers.get("content-length") or 0)
             limit = length if ranged else None
+            if not ranged and total > 0 and not task.file_size:
+                # El HEAD no informó el tamaño: se aprende de la respuesta para
+                # que la barra y la ETA funcionen desde el primer bloque.
+                task.file_size = total
 
             with open(dest_path, "wb") as fh:
                 for block in r.iter_content(chunk_size=512 * 1024):

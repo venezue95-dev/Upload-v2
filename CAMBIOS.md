@@ -1,3 +1,29 @@
+# 🛠 Corrección de progresos (descarga y subida)
+
+**Subida**
+- El progreso ahora usa bytes **realmente enviados** (PUT por streaming con `ProgressReader`). Con bytes reales ya no se
+  inventa «crédito» por tiempo: antes la barra saltaba y se quedaba congelada cuando llegaban los primeros bytes reales.
+- Velocidad y ETA de subida se miden sobre el total en vivo (todas las partes en paralelo); ya no dependen de que
+  termine una parte de 50 MB.
+- **Content-Type**: se deducía del temporal `.tmp` (siempre `application/octet-stream`); ahora sale del nombre visible.
+- Códigos 2xx (200/201/204) se aceptan como éxito; antes solo el 200.
+- Cancelar corta la parte **a mitad** del envío (antes esperaba a que terminara el PUT).
+- Cada reintento de una parte vuelve a contar desde 0 sin que la pantalla retroceda, y los avisos tardíos no suman dos veces.
+- Si la librería `todus` no admite el PUT con progreso, se vuelve solo al `put()` normal (aviso en el log).
+  Se puede desactivar con `S3_LIVE_PROGRESS=0`.
+
+**Descarga**
+- `SpeedMeter` ya no marca 0 B/s entre bloques (Telegram entrega 1 MiB a saltos): la velocidad y la ETA dejaban de
+  parpadear a «calculando…». La velocidad solo baja a 0 tras una parada real.
+- URLs sin `Content-Length` en el HEAD: el tamaño se aprende de la respuesta, así la barra/ETA funcionan.
+- En streaming, las partes reanudadas cuentan como descargadas (la barra de bajada no se quedaba por debajo del 100 %).
+- yt-dlp: se muestra «Procesando con FFmpeg» al unir/convertir (antes la barra quedaba en 100 % sin explicación).
+
+**Pruebas nuevas**: `tests/test_live_upload.py` (servidor HTTP real: contenido íntegro, cabeceras, progreso repartido,
+cancelación a mitad, errores HTTP, reintentos, velocidad).
+
+---
+
 # 🛠 Revisión completa (última versión)
 
 Segunda pasada sobre **todo** el código (no solo los botones). Detalle:

@@ -23,6 +23,7 @@ class S3Client:
     """Imita la API real: put / get / head / delete / list / exists / build_url."""
 
     base_url = "https://s3.todus.cu/stream"
+    is_stub = True          # sin red: el bot usa el put() normal
     fail_times = 0          # cuántas veces fallar antes de aceptar (para probar reintentos)
     put_delay = 0.01        # retardo simulado por subida
     store_dir = None        # si se fija, cada "subida" se copia aquí (key -> archivo)

@@ -16,7 +16,7 @@ import re
 import shutil
 import tempfile
 from typing import Callable, Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from config import CONFIG
 from .queue import TaskCancelled, UploadTask
@@ -42,6 +42,15 @@ def is_media_url(url: str) -> bool:
 def is_youtube_url(url: str) -> bool:
     host = (urlparse(url).hostname or "").lower().lstrip("www.")
     return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+
+
+def is_playlist_url(url: str) -> bool:
+    """Detecta una lista sin confundir `watch?v=...&list=...` con una lista pura."""
+    parsed = urlparse(url)
+    if "/playlist" in (parsed.path or ""):
+        return True
+    query = parse_qs(parsed.query or "")
+    return "list" in query and not query.get("v")
 
 
 def is_facebook_url(url: str) -> bool:
@@ -214,6 +223,10 @@ def probe_media(url: str, media_format: str = "mp4", quality: str = "720") -> Di
                     "size": int(size or 0),
                     "filename": _safe_filename(f"{title}.{ext}"),
                     "duration": int(info.get("duration") or 0),
+                    "is_live": bool(info.get("is_live") or info.get("live_status") in {
+                        "is_live", "is_upcoming"
+                    }),
+                    "is_playlist": info.get("_type") == "playlist",
                     "extractor": info.get("extractor_key") or info.get("extractor") or "media",
                     "qualities": available_video_qualities(info),
                 }
@@ -312,6 +325,14 @@ def download_media(url: str, dest_dir: str, task: UploadTask,
     hook.downloaded_by_key = {}
     hook.totals_by_key = {}
 
+    def pp_hook(data: dict) -> None:
+        """Avisa de la fase de FFmpeg (unir audio+vídeo, convertir): sin esto la
+        barra se quedaba en 100 % de descarga sin explicación."""
+        if task.is_cancelled:
+            raise TaskCancelled("cancelada por el usuario")
+        if data.get("status") == "started":
+            task.phase = "Procesando con FFmpeg"
+
     last_error = None
     for use_cookies in _youtube_cookie_modes(url):
         try:
@@ -320,6 +341,7 @@ def download_media(url: str, dest_dir: str, task: UploadTask,
                 download=True, hook=hook, use_cookies=use_cookies,
             )
             opts["logger"] = log
+            opts["postprocessor_hooks"] = [pp_hook]
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
             break

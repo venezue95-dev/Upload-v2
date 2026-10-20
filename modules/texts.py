@@ -346,9 +346,8 @@ def progress_text(task: "UploadTask") -> str:
     """
     Mensaje de progreso (se refresca cada pocos segundos).
 
-    La subida a toDus no informa bytes intermedios de forma fiable. Por eso la
-    vista de subida no inventa porcentaje, velocidad ni ETA: solo indica que
-    el procesamiento continúa. La descarga sí conserva sus métricas reales.
+    La subida informa bytes enviados por cada parte y conserva una estimación
+    limitada solo durante los primeros instantes de una conexión.
     """
     total = task.file_size or 0
     estimated = task.is_estimated()
@@ -359,14 +358,7 @@ def progress_text(task: "UploadTask") -> str:
         f"<b>{esc(shorten(task.filename, 48))}</b>",
     ]
 
-    if task.status == TaskStatus.UPLOADING:
-        lines += [
-            "<b>⏳ Subida en proceso…</b>",
-            "<i>toDus está procesando el archivo. Se actualizará al finalizar.</i>",
-        ]
-        return cut("\n".join(lines))
-
-    # La descarga sí utiliza bytes y velocidad medidos.
+    # Descarga y subida muestran sus métricas de bytes de forma independiente.
     priming = total > 0 and task.processed_bytes() <= 0 and task.bytes_fetched <= 0
     upload_pct = 100.0 * task.processed_bytes() / total if total else 0.0
     download_pct = task.download_percent()
@@ -399,6 +391,8 @@ def progress_text(task: "UploadTask") -> str:
     lines.append(f"<b>⏳ Restante: {eta_label} · ⏱️ {elapsed}</b>")
 
     detail: List[str] = []
+    if task.resumed_parts:
+        detail.append(f"↻ {len(task.resumed_parts)} partes reanudadas")
     if task.parts_total > 1 and task.status == TaskStatus.UPLOADING:
         detail.append(f"🧩 parte {min(task.parts_done + 1, task.parts_total)}/{task.parts_total}")
     elif task.parts_total > 1:

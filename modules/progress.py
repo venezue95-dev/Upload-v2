@@ -111,6 +111,10 @@ class SpeedMeter:
         self.speed: float = 0.0
         self._samples: int = 0
 
+    # Segundos sin bytes nuevos a partir de los cuales se considera que la
+    # transferencia está parada y la velocidad empieza a decaer.
+    STALL_SECONDS = 4.0
+
     def update(self, total_bytes: int, now: float) -> float:
         """Registra el total acumulado en el instante `now` (time.monotonic)."""
         if self._last_t is None:
@@ -121,12 +125,31 @@ class SpeedMeter:
         if dt < 0.5:
             return self.speed
 
-        delta = max(0, total_bytes - self._last_bytes)
+        # El contador nunca debería retroceder; si lo hace (reintento de una
+        # parte, reinicio de descarga) se toma como nuevo origen sin falsear
+        # la velocidad.
+        if total_bytes < self._last_bytes:
+            self._last_t, self._last_bytes = now, total_bytes
+            return self.speed
+
+        delta = total_bytes - self._last_bytes
+        if delta == 0:
+            # Sin bytes nuevos: NO se avanza la ventana. Los bloques llegan a
+            # saltos (1 MiB de Telegram, fragmentos de yt-dlp) y marcar 0 B/s
+            # en cada hueco hacía parpadear la velocidad y la ETA. El siguiente
+            # bloque se promedia sobre toda la ventana transcurrida.
+            if dt >= self.STALL_SECONDS:
+                self.speed *= 0.5            # cada ventana parada, la velocidad se reduce a la mitad
+                if self.speed < 1024.0:      # < 1 KB/s = parada de hecho
+                    self.speed = 0.0
+                self._last_t = now
+            return self.speed
+
         instant = delta / dt
         self._last_t, self._last_bytes = now, total_bytes
         self._samples += 1
 
-        if self.speed <= 0 or instant <= 0:
+        if self.speed <= 0:
             self.speed = instant
         else:
             self.speed = (1 - self._alpha) * self.speed + self._alpha * instant

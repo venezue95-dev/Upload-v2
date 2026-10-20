@@ -15,6 +15,7 @@ El límite global de subidas simultáneas (DynamicSemaphore) vive en pipeline.py
 from __future__ import annotations
 
 import logging
+import mimetypes
 import os
 import random
 import re
@@ -23,7 +24,8 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
+from urllib.parse import quote
 
 from config import CONFIG
 from .queue import TaskCancelled, UploadTask
@@ -184,8 +186,44 @@ class _LowLevelBackend:
         if CONFIG.s3.base_url:
             kwargs["base_url"] = CONFIG.s3.base_url
         self.client = TodusS3Client(**kwargs)
+        self._progress_confirmed = False
+        # Con el cliente real basta con ``session`` + ``build_url`` (públicos);
+        # el stub de pruebas no hace red, así que se queda en modo normal.
+        self.supports_progress = bool(
+            getattr(self.client, "session", None) is not None
+            and callable(getattr(self.client, "build_url", None))
+            and os.getenv("S3_LIVE_PROGRESS", "1").strip().lower() not in {"0", "false", "no", "off"}
+            and not getattr(self.client, "is_stub", False)
+        )
 
-    def put_file(self, local_path: str, key: str, filename: str) -> None:
+    # ``True`` mientras el PUT con bytes en vivo funcione. Si la librería no
+    # expone lo necesario, o falla la primera vez de forma inesperada, se
+    # vuelve al ``put()`` normal de la librería (sin progreso intermedio).
+    supports_progress: bool = False
+
+    def put_file(self, local_path: str, key: str, filename: str,
+                 progress: Optional[Callable[[int], None]] = None,
+                 cancelled: Optional[Callable[[], bool]] = None) -> None:
+        if progress and self.supports_progress:
+            try:
+                self._put_file_with_progress(local_path, key, filename, progress, cancelled)
+                self._progress_confirmed = True
+                return
+            except TaskCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                if self._progress_confirmed:
+                    raise                       # error real de red/servidor
+                # Nunca ha funcionado: puede ser incompatibilidad con la librería.
+                log.warning(
+                    "PUT con progreso no disponible (%s): se usa el put() de la "
+                    "librería, sin progreso intermedio", exc,
+                )
+                self.supports_progress = False
+        self._put_file_plain(local_path, key, filename, progress)
+
+    def _put_file_plain(self, local_path: str, key: str, filename: str,
+                        progress: Optional[Callable[[int], None]] = None) -> None:
         result = self.client.put(
             local_path=local_path,
             key=key,
@@ -198,6 +236,106 @@ class _LowLevelBackend:
                 f"PUT rechazado (HTTP {result.get('status_code') if result else '?'}): "
                 f"{str(result.get('error') if result else 'sin respuesta')[:200]}"
             )
+        if progress:
+            progress(os.path.getsize(local_path))
+
+    def _put_file_with_progress(self, local_path: str, key: str, filename: str,
+                                progress: Callable[[int], None],
+                                cancelled: Optional[Callable[[], bool]] = None) -> None:
+        """PUT por streaming que informa los bytes realmente enviados."""
+        size = os.path.getsize(local_path)
+        # El tipo se deduce del NOMBRE visible: el temporal acaba en ".tmp" y
+        # siempre daría application/octet-stream (los vídeos dejarían de
+        # reproducirse en el navegador).
+        content_type = (mimetypes.guess_type(filename)[0]
+                        or mimetypes.guess_type(local_path)[0]
+                        or "application/octet-stream")
+        disposition_type = "inline" if CONFIG.s3.inline else "attachment"
+        try:
+            filename.encode("ascii")
+            safe = filename.replace("\\", "_").replace('"', "_")
+            disposition = f'{disposition_type}; filename="{safe}"'
+        except UnicodeEncodeError:
+            encoded = quote(filename, safe="")
+            fallback = filename.encode("ascii", "replace").decode().replace('"', "_")
+            disposition = f'{disposition_type}; filename="{fallback}"; filename*=UTF-8\'\'{encoded}'
+        headers = {
+            "Content-Type": content_type,
+            "Content-Disposition": disposition,
+            "Content-Length": str(size),
+        }
+        chunk_size = max(64 * 1024, int(getattr(self.client, "chunk_size", 512 * 1024) or 0))
+
+        class ProgressReader:
+            """Archivo que cuenta lo que se lee; admite reenvío (seek) tras redirecciones."""
+
+            def __init__(self, path: str) -> None:
+                self.file = open(path, "rb")
+                self.sent = 0
+
+            def __len__(self) -> int:
+                return size
+
+            def read(self, requested: int = -1) -> bytes:
+                if cancelled is not None and cancelled():
+                    raise TaskCancelled("cancelada por el usuario")
+                if requested is None or requested < 0:
+                    requested = chunk_size
+                data = self.file.read(min(requested, chunk_size))
+                if data:
+                    self.sent += len(data)
+                    progress(min(self.sent, size))
+                return data
+
+            def __iter__(self):
+                while True:
+                    data = self.read(chunk_size)
+                    if not data:
+                        return
+                    yield data
+
+            def tell(self) -> int:
+                return self.file.tell()
+
+            def seek(self, offset: int, whence: int = 0) -> int:
+                position = self.file.seek(offset, whence)
+                self.sent = position            # un reenvío vuelve a contar desde ahí
+                return position
+
+            def fileno(self) -> int:
+                return self.file.fileno()
+
+            def close(self) -> None:
+                self.file.close()
+
+        reader = ProgressReader(local_path)
+        response = None
+        try:
+            if hasattr(self.client, "_request") and hasattr(self.client, "_build_url"):
+                response = self.client._request(
+                    "PUT", self.client._build_url(key), data=reader, headers=headers,
+                )
+            else:
+                response = self.client.session.put(
+                    self.client.build_url(key), data=reader, headers=headers,
+                    timeout=CONFIG.s3.timeout,
+                )
+        finally:
+            reader.close()
+        status = getattr(response, "status_code", None)
+        try:
+            if status is None or not (200 <= int(status) < 300):
+                detail = ""
+                try:
+                    detail = (response.text or "")[:200]
+                except Exception:  # noqa: BLE001
+                    pass
+                raise S3Error(f"PUT rechazado (HTTP {status}) {detail}".strip())
+        finally:
+            try:
+                response.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def build_url(self, key: str) -> str:
         # La lib devuelve ".../stream/users/..." (URL-encoded): es la URL pública.
@@ -282,6 +420,8 @@ class S3Client:
         filename: str,
         task: UploadTask,
         label: str,
+        progress: Optional[Callable[[int], None]] = None,
+        on_attempt: Optional[Callable[[], None]] = None,
     ) -> None:
         """Sube un trozo con reintentos. Lanza ChunkUploadError o TaskCancelled."""
         from .runtime_settings import RUNTIME_SETTINGS
@@ -296,8 +436,16 @@ class S3Client:
             if task.is_cancelled:
                 raise TaskCancelled("cancelada por el usuario")
             attempts += 1
+            if on_attempt is not None:
+                try:
+                    on_attempt()            # cada intento cuenta desde 0 bytes
+                except Exception:  # noqa: BLE001
+                    pass
             try:
-                self.backend.put_file(local_path, key, filename)
+                self.backend.put_file(
+                    local_path, key, filename, progress=progress,
+                    cancelled=lambda: task.is_cancelled,
+                )
                 return
             except TaskCancelled:
                 raise
@@ -341,6 +489,11 @@ class S3Client:
                     break
                 dst.write(block)
                 remaining -= len(block)
+
+    @property
+    def reports_progress(self) -> bool:
+        """True si las subidas informan bytes enviados en vivo."""
+        return bool(getattr(self.backend, "supports_progress", False))
 
     def build_url(self, key: str, task: Optional[UploadTask] = None) -> str:
         return self.backend.build_url(key)
