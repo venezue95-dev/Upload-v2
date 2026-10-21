@@ -36,7 +36,7 @@ from config import CONFIG
 from modules import keyboards as K
 from modules import logs as recent_logs
 from modules import notifier, storage
-from modules.handlers import admin, basic, callbacks, cola, media, settings, upload, url
+from modules.handlers import admin, basic, callbacks, cola, group_access, media, settings, upload, url
 from modules import texts as T
 from modules.pipeline import cleanup_downloads_root, run_task
 from modules.queue import QUEUE
@@ -71,6 +71,7 @@ def build_app() -> Client:
 
 
 def register_handlers(app: Client) -> None:
+    group_access.register(app)
     basic.register(app)
     admin.register(app)
     cola.register(app)
@@ -79,7 +80,7 @@ def register_handlers(app: Client) -> None:
     media.register(app)
     url.register(app)
     callbacks.register(app)
-    log.info("Handlers registrados (8 módulos)")
+    log.info("Handlers registrados (9 módulos; verificación obligatoria de grupo activada)")
 
 
 async def resume_pending_tasks(client: Client) -> None:
@@ -89,7 +90,36 @@ async def resume_pending_tasks(client: Client) -> None:
     if not tasks:
         return
     resumed = 0
+    cancelled_by_user: dict[int, int] = {}
+    verification_failed_users = set()
+    group_chat_task_users = set()
     for task in tasks:
+        private_chat = task.chat_id == task.user_id
+        if private_chat:
+            joined, verified = await group_access.verify_group_join(client, task.user_id)
+        else:
+            # El bot ya no procesa tareas cuyo destino era un chat grupal.
+            joined, verified = False, True
+        if not joined:
+            ok, reason = QUEUE.submit(task, force=True)
+            if not ok:
+                log.warning("No se pudo retirar la tarea guardada %s: %s", task.task_id, reason)
+                continue
+            if private_chat:
+                cancel_reason = (
+                    group_access.EXIT_REASON if verified
+                    else "no se pudo verificar la unión al grupo al reanudar"
+                )
+                if not verified:
+                    verification_failed_users.add(task.user_id)
+            else:
+                cancel_reason = "tarea antigua dirigida a un chat grupal; solo se procesa por privado"
+                group_chat_task_users.add(task.user_id)
+            # submit() y cancel() son síncronos: el planificador no puede
+            # arrancar la tarea entre ambas llamadas en este event loop.
+            QUEUE.cancel(task.task_id, reason=cancel_reason)
+            cancelled_by_user[task.user_id] = cancelled_by_user.get(task.user_id, 0) + 1
+            continue
         ok, reason = QUEUE.submit(task, force=True)   # ya estaba admitida antes del apagado
         if not ok:
             log.warning("No se pudo reanudar %s: %s", task.task_id, reason)
@@ -110,6 +140,17 @@ async def resume_pending_tasks(client: Client) -> None:
             task.status_message_id = msg.id
         except Exception:  # noqa: BLE001
             pass
+    for user_id, count in cancelled_by_user.items():
+        explanation = None
+        if user_id in group_chat_task_users:
+            explanation = "Una tarea guardada apuntaba a un chat grupal; ahora el bot solo trabaja por privado."
+        await group_access.notify_cancelled_tasks(
+            client,
+            user_id,
+            count,
+            verification_failed=user_id in verification_failed_users,
+            explanation=explanation,
+        )
     if resumed:
         log.info("↻ %d tarea(s) reencoladas", resumed)
 
@@ -173,8 +214,12 @@ async def shutdown(app: Client) -> None:
 
 def main() -> int:
     setup_logging()
-
     log.info("=== toDus S3 Uploader Bot ===")
+    try:
+        CONFIG.validate_required_group()
+    except ValueError as exc:
+        log.error("Configuración de acceso requerida: %s", exc)
+        return 2
     log.info(
         "Almacenamiento: toDus S3 (%s) | chunk=%d MB | reintentos=%d",
         CONFIG.s3.base_url or "endpoint por defecto de la librería",

@@ -22,6 +22,7 @@ from .. import storage
 from .. import texts as T
 from ..queue import QUEUE, UploadTask
 from ..runtime_settings import RUNTIME_SETTINGS
+from .group_access import cancel_user_tasks, group_denial_text, verify_group_join
 
 log = logging.getLogger("s3_bot.handlers")
 
@@ -212,6 +213,16 @@ async def enqueue(
     (el motivo ya viene formateado en HTML para responder al usuario).
     """
     user = message.from_user
+    is_joined, verified = await verify_group_join(client, user.id)
+    if not is_joined:
+        cancelled = 0
+        if verified:
+            cancelled = await cancel_user_tasks(client, user.id)
+        return None, group_denial_text(
+            verification_failed=not verified,
+            cancelled_count=cancelled,
+        )
+
     task = UploadTask(
         user_id=user.id,
         chat_id=message.chat.id,

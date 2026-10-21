@@ -870,11 +870,13 @@ class QueueManager:
         self.wake()
         return True
 
-    def cancel_user(self, user_id: int) -> int:
+    def cancel_user(
+        self, user_id: int, reason: str = "cancelada por el usuario"
+    ) -> int:
         count = 0
         for task in list(self._tasks.values()):
             if task.user_id == user_id and not task.is_final:
-                if self.cancel(task.task_id):
+                if self.cancel(task.task_id, reason=reason):
                     count += 1
         return count
 

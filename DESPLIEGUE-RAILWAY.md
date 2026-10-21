@@ -166,6 +166,9 @@ Notas:
 - **No definas `PORT`**: no hay servidor web.
 - `BOT_ALLOWED_USERS` vacío = bot público. Para hacerlo privado:
   `BOT_ALLOWED_USERS=11111111,22222222`.
+- El grupo obligatorio `@todusupload` está configurado directamente en
+  `config.py`. Añade el bot como administrador; solo procesa mensajes privados,
+  ignora los del grupo y cancela las tareas del usuario si sale, avisándole por DM.
 - Los ajustes marcados como cíclicos en `/settings` se pueden cambiar desde el
   propio bot sin redeploy (se guardan en `/app/data/settings.json`).
 - El resto de las variables del panel **tienen prioridad** sobre cualquier

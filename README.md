@@ -209,6 +209,26 @@ BOT_ALLOWED_USERS=12345678,87654321,11223344
 
 Vacío = **bot público** (cualquiera que hable con el bot puede subir).
 
+#### Grupo obligatorio
+
+Todo usuario debe estar unido al grupo `@todusupload`. El ID y el enlace
+`https://t.me/todusupload` están definidos directamente en `config.py` como
+`REQUIRED_GROUP_ID` y `REQUIRED_GROUP_URL`; edita esas constantes si quieres
+cambiar el grupo. No hace falta añadir variables al `.env`.
+
+El bot vuelve a verificar que el usuario siga unido en cada mensaje privado y
+cada botón; no conserva caché. También lo comprueba justo antes de añadir una
+tarea a la cola. Si el usuario sale o deja de pertenecer al grupo, el evento de
+Telegram cancela sus tareas en espera y marca las activas para detenerlas; se le
+avisa por privado. Al reiniciar, las tareas recuperadas también se verifican
+antes de reanudarse. Si Telegram no puede confirmar que sigue unido, se bloquea
+el acceso por seguridad.
+
+El bot solo procesa mensajes privados. Aunque sea administrador y Telegram le
+entregue los mensajes del grupo, los ignora silenciosamente para no responder
+ni procesar comandos allí. Mantén el bot como administrador de `@todusupload`
+para que Telegram permita comprobar que otros usuarios siguen unidos.
+
 ### 2. toDus (sin credenciales)
 
 La librería [`todus`](https://github.com/nyxthor-dev/todus-client) habla con

@@ -197,8 +197,14 @@ async def test_cancel() -> None:
     for i in range(4):
         QUEUE.submit(make_task(502, name=f"c{i}.mp4"))
     await asyncio.sleep(0.2)
-    n = QUEUE.cancel_user(502)
+    reason = "dejó de estar unido al grupo obligatorio @todusupload"
+    n = QUEUE.cancel_user(502, reason=reason)
     check("cancel_user cancela varias", n >= 1, f"(n={n})")
+    reason_saved = sum(
+        task.cancel_reason == reason for task in QUEUE.user_tasks(502)
+    )
+    check("se conserva el motivo de cancelación", reason_saved >= n,
+          f"({reason_saved}/{n})")
     await wait_until(lambda: not QUEUE.counts()["active"], timeout=3)
     QUEUE.cleanup(max_age_seconds=0)
 

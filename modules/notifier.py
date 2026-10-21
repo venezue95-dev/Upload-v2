@@ -170,6 +170,8 @@ def _sync_disk_progress(task: UploadTask) -> None:
 async def edit_status(task: UploadTask, text: str, keyboard=None) -> bool:
     if not (_client and task.chat_id and task.status_message_id):
         return False
+    if task.chat_id != task.user_id:
+        return False
     try:
         await _client.edit_message_text(
             task.chat_id,
@@ -202,7 +204,7 @@ async def edit_status(task: UploadTask, text: str, keyboard=None) -> bool:
 
 async def send_status(task: UploadTask, text: str, keyboard=None) -> None:
     """Envía un mensaje nuevo de estado (si el anterior ya no sirve)."""
-    if not (_client and task.chat_id):
+    if not (_client and task.chat_id) or task.chat_id != task.user_id:
         return
     try:
         msg = await _client.send_message(

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Union
 
 # Carga del .env en local (en Docker las variables llegan por env_file).
 # load_dotenv() no sobrescribe variables ya definidas en el entorno.
@@ -100,6 +100,10 @@ _STREAM_ALIASES = {
     "on": "stream", "stream": "stream",
     "off": "classic", "classic": "classic",
 }
+
+# Grupo obligatorio para usar el bot. Para cambiarlo, edita estos dos valores.
+REQUIRED_GROUP_ID = "@todusupload"
+REQUIRED_GROUP_URL = "https://t.me/todusupload"
 
 
 # ----------------------------------------------------------------------
@@ -192,6 +196,8 @@ class AppConfig:
 
     allowed_users: List[int] = field(default_factory=list)
     owner_id: Optional[int] = None
+    required_group_id: Optional[Union[int, str]] = REQUIRED_GROUP_ID
+    required_group_url: Optional[str] = REQUIRED_GROUP_URL
 
     # Rutas
     download_dir: str = "downloads"
@@ -208,6 +214,14 @@ class AppConfig:
     allow_private_urls: bool = False   # permitir URLs a IP privadas
     log_channel_id: Optional[int] = None   # canal donde registrar las subidas
     log_level: str = "INFO"
+
+    def validate_required_group(self) -> None:
+        if self.required_group_id is None:
+            raise ValueError("Falta REQUIRED_GROUP_ID en config.py.")
+        if not self.required_group_url:
+            raise ValueError("Falta REQUIRED_GROUP_URL en config.py.")
+        if not self.required_group_url.startswith("https://t.me/"):
+            raise ValueError("REQUIRED_GROUP_URL debe ser un enlace HTTPS de t.me.")
 
     def validate(self) -> None:
         self.telegram.validate()
@@ -264,7 +278,6 @@ def load_config() -> AppConfig:
     )
 
     owner_id = _get_int("BOT_OWNER_ID", 0) or None
-
     data_dir = _get_str("DATA_DIR", os.path.join(work_dir, "data")) or "data"
     cfg = AppConfig(
         telegram=tg,

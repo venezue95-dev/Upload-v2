@@ -486,16 +486,18 @@ def failed_text(task: "UploadTask") -> str:
 
 
 def cancelled_text(task: "UploadTask") -> str:
-    return cut(
-        "\n".join([
-            "<b>🛑 Cancelado</b>",
-            "",
-            f"📄 {code(shorten(task.filename, 52))}",
-            f"📦 {P.human_size_compact(task.processed_bytes())} de "
-            f"{P.human_size_compact(task.file_size)}",
-            i("Los archivos temporales se han borrado."),
-        ])
-    )
+    lines = [
+        "<b>🛑 Tarea cancelada</b>",
+        "",
+        f"📄 {code(shorten(task.filename, 52))}",
+        f"📦 {P.human_size_compact(task.processed_bytes())} de "
+        f"{P.human_size_compact(task.file_size)}",
+    ]
+    reason = getattr(task, "cancel_reason", None)
+    if reason and reason != "cancelada por el usuario":
+        lines.append(f"⚠️ {i(reason)}")
+    lines.append(i("Los archivos temporales se han borrado."))
+    return cut("\n".join(lines))
 
 
 def retry_queued_text(clone: "UploadTask", resumed: int = 0) -> str:

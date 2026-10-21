@@ -344,16 +344,24 @@ async def test_handlers_register() -> None:
     print("\n▶ Registro de handlers")
     from pyrogram import Client
 
-    from modules.handlers import admin, basic, callbacks, cola, settings, upload, url
+    from modules.handlers import admin, basic, callbacks, cola, group_access, settings, upload, url
 
     app = Client("test_session", api_id=1, api_hash="h", bot_token="1:abc")
     try:
-        for module in (basic, admin, cola, settings, upload, url, callbacks):
+        for module in (group_access, basic, admin, cola, settings, upload, url, callbacks):
             module.register(app)
         await asyncio.sleep(0.2)     # Pyrogram añade los handlers en tareas
         groups = app.dispatcher.groups
         total = sum(len(v) for v in groups.values())
-        check("los 7 módulos se registran", len(groups) >= 1, str(list(groups)))
+        check("los handlers incluyen la verificación global de grupo", -100 in groups,
+              str(list(groups)))
+        handler_names = {
+            type(handler).__name__
+            for handlers in groups.values()
+            for handler in handlers
+        }
+        check("se escucha la salida de miembros del grupo",
+              "ChatMemberUpdatedHandler" in handler_names, str(sorted(handler_names)))
         check("hay handlers registrados", total >= 15, f"({total})")
     finally:
         session = os.path.join(os.getcwd(), "test_session.session")
