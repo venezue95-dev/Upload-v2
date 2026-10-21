@@ -211,10 +211,10 @@ Vacío = **bot público** (cualquiera que hable con el bot puede subir).
 
 #### Grupo obligatorio
 
-Todo usuario debe estar unido al grupo `@todusupload`. El ID y el enlace
-`https://t.me/todusupload` están definidos directamente en `config.py` como
-`REQUIRED_GROUP_ID` y `REQUIRED_GROUP_URL`; edita esas constantes si quieres
-cambiar el grupo. No hace falta añadir variables al `.env`.
+Todo usuario debe estar unido al grupo `@todusupload` (ID `-1003941841527`).
+El ID y el enlace `https://t.me/todusupload` están definidos directamente en
+`config.py` como `REQUIRED_GROUP_ID` y `REQUIRED_GROUP_URL`; edita esas constantes
+si quieres cambiar el grupo. No hace falta añadir variables al `.env`.
 
 El bot vuelve a verificar que el usuario siga unido en cada mensaje privado y
 cada botón; no conserva caché. También lo comprueba justo antes de añadir una

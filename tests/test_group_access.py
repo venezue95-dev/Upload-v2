@@ -60,7 +60,7 @@ class GroupAccessTests(unittest.TestCase):
 
     def test_hardcoded_group_configuration(self):
         CONFIG.validate_required_group()
-        self.assertEqual(CONFIG.required_group_id, "@todusupload")
+        self.assertEqual(CONFIG.required_group_id, -1003941841527)
         self.assertEqual(CONFIG.required_group_url, "https://t.me/todusupload")
 
     def test_only_private_chats_are_handled(self):
@@ -79,7 +79,7 @@ class GroupAccessTests(unittest.TestCase):
         joined, verified = asyncio.run(verify_group_join(client, 456))
         self.assertTrue(joined)
         self.assertTrue(verified)
-        self.assertEqual(client.request, ("@todusupload", 456))
+        self.assertEqual(client.request, (-1003941841527, 456))
 
     def test_group_verification_blocks_user_who_left(self):
         client = FakeClient(SimpleNamespace(status=SimpleNamespace(name="LEFT")))
@@ -103,7 +103,7 @@ class GroupAccessTests(unittest.TestCase):
     def test_leaving_required_group_cancels_tasks_and_notifies_privately(self):
         user = SimpleNamespace(id=456)
         event = SimpleNamespace(
-            chat=SimpleNamespace(username="todusupload"),
+            chat=SimpleNamespace(id=-1003941841527, username="todusupload"),
             old_chat_member=SimpleNamespace(
                 status=SimpleNamespace(name="MEMBER"), user=user
             ),
@@ -125,7 +125,7 @@ class GroupAccessTests(unittest.TestCase):
         user = SimpleNamespace(id=456)
         client = FakeClient()
         other_group_event = SimpleNamespace(
-            chat=SimpleNamespace(username="another_group"),
+            chat=SimpleNamespace(id=-1001111111111, username="another_group"),
             old_chat_member=SimpleNamespace(
                 status=SimpleNamespace(name="MEMBER"), user=user
             ),
@@ -134,7 +134,7 @@ class GroupAccessTests(unittest.TestCase):
             ),
         )
         still_joined_event = SimpleNamespace(
-            chat=SimpleNamespace(username="todusupload"),
+            chat=SimpleNamespace(id=-1003941841527, username="todusupload"),
             old_chat_member=SimpleNamespace(
                 status=SimpleNamespace(name="MEMBER"), user=user
             ),
@@ -153,7 +153,7 @@ class GroupAccessTests(unittest.TestCase):
 
         task = UploadTask(
             user_id=456,
-            chat_id=-1001234567890,
+            chat_id=-1003941841527,
             message_id=10,
             filename="video.mp4",
             file_size=100,

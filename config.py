@@ -102,7 +102,7 @@ _STREAM_ALIASES = {
 }
 
 # Grupo obligatorio para usar el bot. Para cambiarlo, edita estos dos valores.
-REQUIRED_GROUP_ID = "@todusupload"
+REQUIRED_GROUP_ID = -1003941841527
 REQUIRED_GROUP_URL = "https://t.me/todusupload"
 
 
