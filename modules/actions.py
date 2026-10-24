@@ -63,6 +63,15 @@ def last_user_task(user_id: int, *, only_retryable: bool = False,
 # ----------------------------------------------------------------------
 # Reintentar (reanudando las partes ya subidas).
 # ----------------------------------------------------------------------
+def _uses_active_key_layout(folder: Optional[str], parts: Dict[int, str]) -> bool:
+    """Solo reutiliza partes guardadas bajo prefijo/token de la versión actual."""
+    if not folder or len(folder) != 7 or not folder.isascii() or not folder.isalnum():
+        return False
+    prefix = CONFIG.s3.key_prefix.strip("/")
+    root = f"{prefix}/{folder}/"
+    return bool(parts) and all(key.startswith(root) for key in parts.values())
+
+
 def resume_state(task: UploadTask) -> Tuple[Optional[str], Dict[int, str]]:
     """
     Devuelve (carpeta, {nº de parte: clave}) de las partes ya subidas.
@@ -75,7 +84,9 @@ def resume_state(task: UploadTask) -> Tuple[Optional[str], Dict[int, str]]:
     if task.keys_by_part:
         parts = {n: k for n, k in task.keys_by_part.items() if k}
         if parts:
-            return _folder_of(task.s3_base, next(iter(parts.values()))), parts
+            folder = _folder_of(task.s3_base, next(iter(parts.values())))
+            if _uses_active_key_layout(folder, parts):
+                return folder, parts
 
     row = storage.get_task(task.task_id) if task.task_id else None
     if row and row.get("keys"):
@@ -85,12 +96,14 @@ def resume_state(task: UploadTask) -> Tuple[Optional[str], Dict[int, str]]:
             if number:
                 parts[number] = key
         if parts:
-            return _folder_of(row.get("base"), next(iter(parts.values()))), parts
+            folder = _folder_of(row.get("base"), next(iter(parts.values())))
+            if _uses_active_key_layout(folder, parts):
+                return folder, parts
     return None, {}
 
 
 def _folder_of(base: Optional[str], sample_key: str) -> str:
-    """Nombre de la carpeta de la subida ('20260101-120000-ab12cd')."""
+    """Token de siete caracteres que identifica la carpeta de una subida."""
     return base or os.path.basename(os.path.dirname(sample_key))
 
 

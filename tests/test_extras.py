@@ -287,22 +287,29 @@ async def main() -> int:
     from modules.actions import resume_state as _resume_state
 
     tarea = UploadTask(user_id=7, chat_id=7, filename="x.mkv", file_size=100)
-    tarea.s3_base = "20260101-120000-ab12cd"
-    tarea.keys_by_part = {1: "users/tg_7/telegram/20260101-120000-ab12cd/x.part001.mkv",
-                          3: "users/tg_7/telegram/20260101-120000-ab12cd/x.part003.mkv"}
+    tarea.s3_base = "aB3xY72"
+    root_key = f"{CONFIG.s3.key_prefix}/aB3xY72"
+    tarea.keys_by_part = {1: f"{root_key}/x.part001.mkv",
+                          3: f"{root_key}/x.part003.mkv"}
     folder, parts = _resume_state(tarea)
-    check("detecta la carpeta del intento anterior", folder == "20260101-120000-ab12cd", str(folder))
+    check("detecta el token de carpeta actual", folder == "aB3xY72", str(folder))
     check("detecta las partes ya subidas (con huecos)", sorted(parts) == [1, 3], str(parts))
     # Tras un reinicio solo queda el historial: el nº de parte sale del nombre.
+    history_root = f"{CONFIG.s3.key_prefix}/B3cD1e2"
     storage.record_task(FakeTask(
         task_id="r1", user_id=7, status=TaskStatus.FAILED, parts_total=3,
-        keys_by_part={3: "users/tg_7/telegram/20260202-000000-ffffff/y.part003.mkv",
-                      1: "users/tg_7/telegram/20260202-000000-ffffff/y.part001.mkv"},
+        s3_base="B3cD1e2",
+        keys_by_part={3: f"{history_root}/y.part003.mkv",
+                      1: f"{history_root}/y.part001.mkv"},
     ), CONFIG)
     huerfana = UploadTask(user_id=7, chat_id=7, filename="y.mkv", file_size=100, task_id="r1")
     folder2, parts2 = _resume_state(huerfana)
     check("desde el historial se conservan los números de parte",
-          sorted(parts2) == [1, 3] and folder2 == "20260202-000000-ffffff", f"{folder2} {parts2}")
+          sorted(parts2) == [1, 3] and folder2 == "B3cD1e2", f"{folder2} {parts2}")
+    ajena = UploadTask(user_id=7, chat_id=7, filename="y.mkv", file_size=100)
+    ajena.s3_base = "aB3xY72"
+    ajena.keys_by_part = {1: "archived/aB3xY72/y.part001.mkv"}
+    check("no reutiliza una ruta fuera del formato actual", _resume_state(ajena) == (None, {}))
     vacia = UploadTask(user_id=7, chat_id=7, filename="y.mkv", file_size=100)
     check("una tarea nueva no reanuda nada", _resume_state(vacia) == (None, {}))
 

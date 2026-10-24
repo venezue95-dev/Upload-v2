@@ -310,7 +310,7 @@ def test_textos() -> None:
 
     task.status = TaskStatus.COMPLETED
     task.parts_total = 4
-    task.urls = [f"https://s3.todus.cu/stream/users/tg_7/telegram/x.part{i:03d}" for i in range(1, 5)]
+    task.urls = [f"https://s3.todus.cu/stream/toDusDownload/aB3xY72/x.part{i:03d}" for i in range(1, 5)]
     final = T.final_text(task)
     check("texto final con enlaces", "<pre>" in final and "https://" in final)
     check("texto final dentro del límite", len(final) < 4096, str(len(final)))
@@ -463,7 +463,7 @@ def mk_task(user_id, name, status, **kw):
     t.speed = 1.5 * 1024 * 1024
     if status == TaskStatus.COMPLETED:
         n = kw.pop("n_urls", 1)
-        t.urls = [f"https://s3.todus.cu/stream/users/tg_1/telegram/x/y.part{i:03d}" for i in range(1, n + 1)]
+        t.urls = [f"https://s3.todus.cu/stream/toDusDownload/aB3xY72/x/y.part{i:03d}" for i in range(1, n + 1)]
         t.keys = [u.split("/stream/")[1] for u in t.urls]
         t.finished_at = t.created_at + 30
     return t
@@ -562,7 +562,7 @@ def test_all_views() -> None:
 def test_texto_largo_seguro() -> None:
     print("\n▶ Mensajes largos: HTML siempre cerrado")
     task = mk_task(1, "enorme.mkv", TaskStatus.COMPLETED, n_urls=300, parts_total=300)
-    task.urls = [f"https://s3.todus.cu/stream/users/tg_1/telegram/20260101-000000-abcdef/enorme.part{i:03d}.mkv" for i in range(1, 301)]
+    task.urls = [f"https://s3.todus.cu/stream/toDusDownload/aB3xY72/enorme.part{i:03d}.mkv" for i in range(1, 301)]
     final = T.final_text(task)
     check("300 partes: el mensaje final cabe", len(final) <= 4096, str(len(final)))
     check("300 partes: el HTML está bien cerrado", html_ok(final))

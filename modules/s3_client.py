@@ -19,6 +19,8 @@ import mimetypes
 import os
 import random
 import re
+import secrets
+import string
 import threading
 import time
 import uuid
@@ -111,21 +113,18 @@ def part_number_from_key(key: str) -> Optional[int]:
 
 def pretty_key(user_id: int) -> Tuple[str, str]:
     """
-    Devuelve (nombre_base_visible, carpeta_base_en_el_bucket).
+    Devuelve (carpeta opaca de la subida, carpeta base en el bucket).
 
-    Estructura de las claves (una carpeta única por subida, para que las
-    partes convivan juntas y los enlaces sean legibles):
+    Las subidas nuevas no exponen el ID de Telegram ni la fecha. El token de
+    siete caracteres hace la ruta menos obvia, pero NO es un control de permisos:
+    quien tenga la URL todavía puede acceder al objeto si toDus lo permite.
 
-        users/tg_<user_id>/telegram/<AAAAMMDD-HHMMSS>-<hash>/<archivo>
-
-    Cada usuario mantiene su "namespace" (tg_<user_id>) y así los archivos
-    no se mezclan entre usuarios.
+        toDusDownload/<token-aleatorio-de-7-caracteres>/<archivo>
     """
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    short = uuid.uuid4().hex[:6]
-    folder = f"{stamp}-{short}"
+    alphabet = string.ascii_letters + string.digits
+    folder = "".join(secrets.choice(alphabet) for _ in range(7))
     prefix = CONFIG.s3.key_prefix.strip("/")
-    base_key = f"{prefix}/tg_{user_id}/telegram/{folder}"
+    base_key = f"{prefix}/{folder}"
     return folder, base_key
 
 
@@ -144,7 +143,7 @@ def plan_parts(user_id: int, original_name: str, file_size: int, chunk_size: int
         # Reanudación: se reutiliza la carpeta del intento anterior para que las
         # partes ya subidas sigan siendo válidas (mismas claves y mismos enlaces).
         prefix = CONFIG.s3.key_prefix.strip("/")
-        base_key = f"{prefix}/tg_{user_id}/telegram/{folder}"
+        base_key = f"{prefix}/{folder}"
     else:
         folder, base_key = pretty_key(user_id)
 

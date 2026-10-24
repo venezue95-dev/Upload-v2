@@ -126,9 +126,8 @@ async with user_lock:                      # ¡el handler se queda aquí!
   el hilo e ignoraba la cancelación.
 - **`slice_to_file` + claves por número de parte**: las subidas terminan
   desordenadas y las URLs se generan en orden correcto (`part001`, `part002`…).
-- **Los objetos van a una carpeta única por subida**:
-  `users/tg_<id>/telegram/20261012-124207-8b309d/pelicula.part002.mkv` →
-  enlaces legibles y sin mezclar usuarios.
+- **Los objetos van a una carpeta propia por subida**:
+  `toDusDownload/<token7>/pelicula.part002.mkv`; la clave no incluye el ID de Telegram.
 - **Guardia de disco**: no se descarga si el espacio libre cae por debajo de
   `MIN_FREE_GB` (evita llenar el servidor y romper todo).
 - **SSRF**: se rechazan enlaces a IPs privadas por defecto.
