@@ -141,7 +141,7 @@ class S3Config:
     """Configuración del cliente toDus S3."""
 
     base_url: Optional[str] = None
-    key_prefix: str = "toDusDownload"
+    key_prefix: str = "users"
     chunk_size_mb: int = 50
     max_parallel: int = 3
     global_workers: int = 6
@@ -253,7 +253,7 @@ def load_config() -> AppConfig:
 
     s3 = S3Config(
         base_url=_get_str("S3_BASE_URL") or None,
-        key_prefix=_get_str("S3_KEY_PREFIX", "toDusDownload").strip("/") or "toDusDownload",
+        key_prefix=_get_str("S3_KEY_PREFIX", "users").strip("/") or "users",
         chunk_size_mb=_get_int("S3_CHUNK_SIZE_MB", 50),
         max_parallel=_get_int("S3_MAX_PARALLEL", 3),
         global_workers=_get_int("S3_GLOBAL_WORKERS", 6),

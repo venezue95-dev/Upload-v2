@@ -54,7 +54,7 @@ from config import CONFIG                                  # noqa: E402
 from modules import storage                                # noqa: E402
 from modules.queue import QUEUE, TaskStatus, UploadTask     # noqa: E402
 from modules.runtime_settings import RUNTIME_SETTINGS       # noqa: E402
-from modules.s3_client import plan_parts, pretty_key, safe_filename  # noqa: E402
+from modules.s3_client import plan_parts, safe_filename     # noqa: E402
 
 PASSED = []
 FAILED = []
@@ -86,7 +86,7 @@ async def fake_runner(client, task: UploadTask) -> None:
             task.mark_finished(TaskStatus.CANCELLED)
             return
         await asyncio.sleep(0.02)
-    task.keys = [f"{CONFIG.s3.key_prefix}/aB3xY72/{task.task_id}"]
+    task.keys = [f"users/tg_{task.user_id}/telegram/{task.task_id}"]
     task.urls = [f"https://s3.todus.cu/stream/{task.keys[0]}"]
     task.bytes_transferred = task.file_size
     task.mark_finished(TaskStatus.COMPLETED)
@@ -268,22 +268,6 @@ async def test_persistence_and_history() -> None:
 
 def test_plan_parts() -> None:
     print("\n▶ Troceo de archivos")
-    folder, base_key = pretty_key(55)
-    folder2, _ = pretty_key(55)
-    prefix = CONFIG.s3.key_prefix.strip("/")
-    check("carpeta nueva con token aleatorio alfanumérico de 7 caracteres",
-          len(folder) == 7 and folder.isascii() and folder.isalnum()
-          and f"tg_55" not in base_key and base_key == f"{prefix}/{folder}",
-          base_key)
-    check("prefijo nuevo toDusDownload", prefix == "toDusDownload", prefix)
-    check("cada subida obtiene carpeta distinta", folder != folder2)
-    _, opaque_single = plan_parts(55, "foto.png", 10, 100, folder=folder)
-    check("la clave usa la carpeta opaca", opaque_single[0].key == f"{prefix}/{folder}/foto.png",
-          opaque_single[0].key)
-    _, resumed_single = plan_parts(55, "foto.png", 10, 100, folder=folder)
-    check("reintento vigente conserva su key",
-          resumed_single[0].key == opaque_single[0].key, resumed_single[0].key)
-
     base, parts = plan_parts(55, "pelicula.mkv", 800 * 1024 * 1024, 100 * 1024 * 1024)
     check("genera 8 partes de 100 MB", len(parts) == 8, f"({len(parts)})")
     check("nombres con part", parts[0].part_name.startswith("pelicula.part001"),

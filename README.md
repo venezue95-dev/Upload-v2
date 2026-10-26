@@ -234,12 +234,11 @@ para que Telegram permita comprobar que otros usuarios siguen unidos.
 La librería [`todus`](https://github.com/nyxthor-dev/todus-client) habla con
 `s3.todus.cu` directamente; no hay token, Access Key ni Secret Key.
 
-Las subidas nuevas usan el prefijo propio `toDusDownload` y una carpeta aleatoria
-de 7 caracteres, sin poner el ID de Telegram en la clave:
+Cada usuario de Telegram sube a su propia carpeta:
 
 ```
-toDusDownload/<token7>/pelicula.mkv
-toDusDownload/<token7>/pelicula.part002.mkv
+users/tg_<user_id>/telegram/<fecha-hora>-<hash>/pelicula.mkv
+users/tg_<user_id>/telegram/<fecha-hora>-<hash>/pelicula.part002.mkv
 ```
 
 > ✅ **v2 corrige un fallo grave**: la versión anterior hacía
